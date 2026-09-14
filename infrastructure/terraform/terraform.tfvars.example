@@ -1,0 +1,16 @@
+# Copy to terraform.tfvars (gitignored) and fill in ssh_key_name.
+# do_token comes from the environment instead: export TF_VAR_do_token=$DO_API_KEY
+
+# REQUIRED: the name of an SSH key already uploaded to your DigitalOcean account
+# (doctl compute ssh-key list, or Settings -> Security in the control panel).
+ssh_key_name = "my-laptop"
+
+# Optional overrides (defaults shown).
+# region       = "fra1"
+# droplet_size = "s-1vcpu-1gb"
+# droplet_name = "ai-agents"
+
+# Lock SSH to your own address. Get it with `curl -s ifconfig.me`. Leave the
+# default (whole internet) if your address changes often — a stale value here
+# locks you out of the droplet.
+# ssh_allowed_cidrs = ["203.0.113.4/32"]

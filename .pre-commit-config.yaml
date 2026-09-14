@@ -1,0 +1,23 @@
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.12
+    hooks:
+      - id: ruff-check
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: local
+    hooks:
+      - id: ty-check
+        name: ty type check (staged files)
+        entry: uv run ty check
+        language: system
+        types: [python]
+        pass_filenames: true
+
+      - id: check-layers
+        name: enforce layer boundaries
+        entry: uv run python tools/check_layers.py
+        language: system
+        pass_filenames: false
+        always_run: true

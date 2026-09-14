@@ -1,0 +1,57 @@
+x-hardening: &hardening
+  restart: unless-stopped
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  # Untrusted documents are parsed here: immutable image, /tmp in RAM, bounded pids.
+  read_only: true
+  tmpfs:
+    - /tmp
+  pids_limit: 256
+  # docker logs is the only diagnostic here (OTEL is off), so bound it.
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
+services:
+  bot:
+    <<: *hardening
+    image: ai_agents:latest
+    build:
+      context: ../..
+      dockerfile: infrastructure/docker/Dockerfile
+    command: telegram-bot
+    # Allow-listed keys written by deploy.sh; nothing else from the host reaches a container.
+    env_file: /opt/ai_agents/bot.env
+    # A runaway parse OOM-kills (and restarts) this container instead of thrashing the host.
+    mem_limit: 700m
+    memswap_limit: 900m
+    environment:
+      OTEL_ENABLED: "false"
+      TELEGRAM_DB_PATH: /data/telegram_bot.sqlite3
+    volumes:
+      - appdata:/data
+
+  dashboard:
+    <<: *hardening
+    image: ai_agents:latest
+    # Binds 0.0.0.0 INSIDE the container; the host-side publish below pins it
+    # to the droplet's loopback, so it is only reachable via SSH tunnel.
+    command: usage-dashboard --host 0.0.0.0 --port 8081
+    mem_limit: 160m
+    memswap_limit: 160m
+    environment:
+      OTEL_ENABLED: "false"
+      TELEGRAM_DB_PATH: /data/telegram_bot.sqlite3
+    volumes:
+      - appdata:/data
+    ports:
+      - "127.0.0.1:8081:8081"
+    depends_on:
+      - bot
+
+volumes:
+  appdata:

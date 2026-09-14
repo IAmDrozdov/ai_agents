@@ -1,0 +1,16 @@
+apm-server:
+  host: "0.0.0.0:8200"
+
+queue.mem.events: 4096
+queue.mem.flush.min_events: 512
+queue.mem.flush.timeout: 1s
+
+output.elasticsearch:
+  hosts: ["http://elasticsearch:9200"]
+
+setup.kibana:
+  host: "http://kibana:5601"
+
+logging.level: info
+logging.to_files: false
+logging.to_stderr: true

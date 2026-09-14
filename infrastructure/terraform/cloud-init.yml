@@ -1,0 +1,45 @@
+#cloud-config
+package_update: true
+package_upgrade: true
+packages:
+  - fail2ban
+  - unattended-upgrades
+  # Ubuntu's own signed apt packages instead of `curl | sh` — same effect, no
+  # curl-pipe-shell supply chain (see the security review, L7).
+  - docker.io
+  - docker-compose-v2
+ssh_pwauth: false
+write_files:
+  # Ubuntu 24.04 has no /var/log/auth.log, so the sshd jail must read the journal.
+  - path: /etc/fail2ban/jail.d/sshd.local
+    content: |
+      [sshd]
+      enabled = true
+      backend = systemd
+      maxretry = 5
+      bantime = 1h
+  # sshd keeps the first value it sees; the 00- prefix wins over other drop-ins.
+  - path: /etc/ssh/sshd_config.d/00-hardening.conf
+    content: |
+      PermitRootLogin prohibit-password
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      X11Forwarding no
+  # Docker's apt repo is not an allowed origin by default, so its fixes would never land.
+  - path: /etc/apt/apt.conf.d/52-docker-and-reboot
+    content: |
+      Unattended-Upgrade::Origins-Pattern { "origin=Docker"; };
+      Unattended-Upgrade::Automatic-Reboot "true";
+      Unattended-Upgrade::Automatic-Reboot-Time "04:30";
+runcmd:
+  - systemctl enable --now docker
+  - apt-get install -y fail2ban
+  - systemctl enable --now fail2ban
+  - systemctl reload ssh
+  - dpkg-reconfigure -f noninteractive unattended-upgrades
+  - fallocate -l 2G /swapfile
+  - chmod 600 /swapfile
+  - mkswap /swapfile
+  - swapon /swapfile
+  - echo '/swapfile none swap sw 0 0' >> /etc/fstab
+  - mkdir -p /opt/ai_agents/src

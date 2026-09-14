@@ -1,0 +1,15 @@
+---
+description: ai_agents monorepo rules
+alwaysApply: true
+---
+
+Follow `AGENTS.md` at repo root. Entry point.
+
+Reminders:
+- Layered: `shared` ← `workflows/*` ← `interfaces/*`. Validated `tools/check_layers.py`.
+- Two-layer config: env via `shared.config.Settings`, knobs via `<workflow>.config.<Name>Config`. Never mix.
+- LangChain primary, LangGraph only when justified (ADR-003).
+- No tests. Verify with `uv run smoke <id> <path-or-url>` (ADR-001, ADR-012).
+- pre-commit runs ruff+ty+check_layers on `git commit`. Don't bypass.
+
+Skills in `.skills/`. Read before scaffolding.
