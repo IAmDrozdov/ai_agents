@@ -38,6 +38,7 @@ async def _smoke(text: str) -> int:
     )
     filing = await make_classifier(settings).file(request)
     print(f"   filing: {filing.sections or ['other']} ({settings.notes_classifier_provider})")
+    print(f"    title: {filing.title}")
     print(f"     gist: {filing.gist}")
     return 0
 

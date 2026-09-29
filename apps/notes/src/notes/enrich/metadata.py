@@ -14,9 +14,21 @@ class PageMeta:
     sitename: str | None = None
 
 
+AUTHOR_MAX_CHARS = 60
+AUTHOR_MAX_WORDS = 6
+
+
 def _clean(value: object) -> str | None:
     text = str(value).strip() if value else ""
     return text or None
+
+
+def _clean_author(value: object) -> str | None:
+    """Free-form bylines (telegra.ph) can hold a whole sentence; that is not a name."""
+    text = _clean(value)
+    if text is None or len(text) > AUTHOR_MAX_CHARS or len(text.split()) > AUTHOR_MAX_WORDS:
+        return None
+    return text
 
 
 def page_metadata(html: str) -> PageMeta:
@@ -28,7 +40,7 @@ def page_metadata(html: str) -> PageMeta:
         return PageMeta()
     return PageMeta(
         title=_clean(meta.title),
-        author=_clean(meta.author),
+        author=_clean_author(meta.author),
         description=_clean(meta.description),
         image=_clean(meta.image),
         sitename=_clean(meta.sitename),

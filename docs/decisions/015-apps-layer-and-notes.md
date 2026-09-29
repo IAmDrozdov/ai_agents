@@ -46,9 +46,10 @@ thin-adapter rule (ADR-005).
 6. **No automated tests** (ADR-001 unchanged). maxi-notes' pytest suite was left behind.
    The smoke surface is `uv run notes-smoke <url-or-text>`: fetch and file one input and
    print the result.
-7. **Classifier provider is OpenAI** (notes ticket 05), so every paid call in the repo
-   still goes to one provider and one key. Until it lands, `NOTES_CLASSIFIER_PROVIDER=fake`
-   files everything to Other with the caption as the Gist.
+7. **Classifier provider is OpenAI** (notes ticket 05, `NOTES_CLASSIFIER_PROVIDER=openai`),
+   so every paid call in the repo still goes to one provider and one key. It costs about
+   $0.002 an Item and is logged, not gated: only the admin saves, and the admin is exempt
+   from the daily cap. `fake` stays for offline runs.
 
 ## Consequences
 

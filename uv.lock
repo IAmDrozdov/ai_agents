@@ -1166,6 +1166,7 @@ version = "0.0.0"
 source = { editable = "apps/notes" }
 dependencies = [
     { name = "aiohttp" },
+    { name = "openai" },
     { name = "pydantic" },
     { name = "shared" },
     { name = "trafilatura" },
@@ -1174,6 +1175,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "aiohttp", specifier = ">=3.10" },
+    { name = "openai", specifier = ">=1.0" },
     { name = "pydantic", specifier = ">=2.7" },
     { name = "shared", editable = "shared" },
     { name = "trafilatura", specifier = ">=1.12" },

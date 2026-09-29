@@ -28,7 +28,8 @@ class Settings(BaseSettings):
     # Notes (apps/notes, ADR-015): the admin's save-for-later store.
     notes_db_path: str = "data/notes.sqlite3"
     notes_enrich_sweep_seconds: int = 60
-    notes_classifier_provider: str = "fake"
+    notes_classifier_provider: str = "fake"  # fake | openai
+    notes_classifier_model: str = ""  # empty = shared.pricing.DEFAULT_TRANSLATE_MODEL
 
     log_level: str = "INFO"
     otel_enabled: bool = False

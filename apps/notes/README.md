@@ -33,12 +33,13 @@ Sections are created on first start.
 |---|---|---|
 | `NOTES_DB_PATH` | `data/notes.sqlite3` | sqlite location (compose pins `/data/notes.sqlite3`) |
 | `NOTES_ENRICH_SWEEP_SECONDS` | `60` | retry / restart-leftover sweep interval |
-| `NOTES_CLASSIFIER_PROVIDER` | `fake` | `fake` only until ticket 05 adds `openai` |
+| `NOTES_CLASSIFIER_PROVIDER` | `fake` | `openai` (Filing + Russian Gist, ~$0.002 an Item) or `fake` (offline, everything to Other) |
+| `NOTES_CLASSIFIER_MODEL` | — | empty = `shared.pricing.DEFAULT_TRANSLATE_MODEL` |
 
 ## Status
 
 Tickets 01–04 were done in maxi-notes: a Note on the web, deploy, Links with dedupe, and
-Enrichment without an LLM. Next up are 05 (OpenAI Classifier), 06 (Filing keyboard), 07 (Browse),
+Enrichment without an LLM. 05 (OpenAI Classifier) was done here. Next up are 06 (Filing keyboard), 07 (Browse),
 08 (sorting pass on the web), 09 (Section management) and 10 (housekeeping). Their "(seam N)"
 criteria predate the merge: check them by hand or with `notes-smoke`, since this repo has no
 automated tests (ADR-001).
