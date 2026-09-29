@@ -34,6 +34,9 @@ services:
       TELEGRAM_DB_PATH: /data/telegram_bot.sqlite3
     volumes:
       - appdata:/data
+    networks:
+      - default
+      - egress
 
   dashboard:
     <<: *hardening
@@ -53,5 +56,26 @@ services:
     depends_on:
       - bot
 
+  # Optional (profile "warp", ADR-014): free Cloudflare WARP egress for yt-dlp.
+  # Reached only by the bot, over the `egress` network, as socks5h://warp:40000; no published port.
+  warp:
+    <<: *hardening
+    profiles: ["warp"]
+    image: ai_agents_warp:latest
+    build:
+      context: warp
+    environment:
+      WARP_ACCEPT_TOS: ${WARP_ACCEPT_TOS:-}
+    mem_limit: 64m
+    memswap_limit: 64m
+    volumes:
+      - warpdata:/data
+    networks:
+      - egress
+
+networks:
+  egress:
+
 volumes:
   appdata:
+  warpdata:

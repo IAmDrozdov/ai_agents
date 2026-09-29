@@ -1,6 +1,6 @@
 # ADR-008: Telegram bot interface + DigitalOcean deployment
 
-Status: Accepted (2026-07-22). Amended 2026-09-13: `deploy.sh`'s allow-list also ships the `BOT_*` operator settings (ADR-004 amendment).
+Status: Accepted (2026-07-22). Amended 2026-09-13: `deploy.sh`'s allow-list also ships the `BOT_*` operator settings (ADR-004 amendment). Amended 2026-09-20: the allow-list gains `YTDLP_PROXY`, and an optional `warp` sidecar exists (ADR-014).
 
 ## Decision
 

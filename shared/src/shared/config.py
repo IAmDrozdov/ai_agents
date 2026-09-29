@@ -15,6 +15,9 @@ class Settings(BaseSettings):
     admin_telegram_id: int | None = None
     telegram_db_path: str = "data/telegram_bot.sqlite3"
 
+    # Egress proxy for yt-dlp only, e.g. socks5h://warp:40000 (ADR-014). Unset = direct.
+    ytdlp_proxy: str | None = None
+
     # Telegram bot operator policy, per deployment (ADR-004, amended 2026-09-13).
     bot_languages: str = "English,Russian,Chinese,Japanese,Korean,French,German,Spanish"
     bot_default_source_language: str = "English"

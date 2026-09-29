@@ -26,7 +26,9 @@ def build_transcribe_node(
         progress.phase("transcribing", 1)
         try:
             audio_bytes, ext = download_audio(
-                state.get("url", ""), max_bytes=config.max_audio_bytes_for_stt
+                state.get("url", ""),
+                max_bytes=config.max_audio_bytes_for_stt,
+                proxy=settings.ytdlp_proxy,
             )
         except YouTubeError as exc:
             return {**state, "error": str(exc)}

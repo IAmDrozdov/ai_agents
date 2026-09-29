@@ -60,10 +60,12 @@ that first connection against the one in the DigitalOcean console for this dropl
 ```
 
 Rsyncs the repo to `/opt/ai_agents/src`, uploads **only** `OPENAI_API_KEY`,
-`TELEGRAM_BOT_TOKEN`, `ADMIN_TELEGRAM_ID`, `LOG_LEVEL` and the `BOT_*` operator
-settings from `.env` as `/opt/ai_agents/bot.env` (0600; the dashboard container gets
-no secrets at all), builds the image **on the droplet** (all deps ship manylinux
-wheels; 1 GB RAM + swap is enough), and runs `docker compose up -d`.
+`TELEGRAM_BOT_TOKEN`, `ADMIN_TELEGRAM_ID`, `LOG_LEVEL`, `YTDLP_PROXY` and the `BOT_*`
+operator settings from `.env` as `/opt/ai_agents/bot.env` (0600; the dashboard container
+gets no secrets at all), builds the image **on the droplet** (all deps ship manylinux
+wheels; 1 GB RAM + swap is enough), and runs `docker compose up -d`. With
+`WARP_ACCEPT_TOS=yes` in `.env` it also starts the optional `warp` egress sidecar
+(ADR-014).
 
 Before a deploy, scan the lockfile for known vulnerabilities:
 

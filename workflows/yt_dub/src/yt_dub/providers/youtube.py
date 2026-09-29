@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import re
 import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -27,6 +28,10 @@ _WHITESPACE = re.compile(r"\s+")
 # json3 carries per-segment text with no rolling-duplicate problem; vtt is the
 # fallback for the rare track that only ships as vtt/srv/ttml.
 _CAPTION_EXT_PREFERENCE = ("json3", "vtt")
+
+# timedtext answers 429 intermittently; a failed fetch otherwise falls through to paid STT.
+_CAPTION_ATTEMPTS = 3
+_CAPTION_BACKOFF_S = 2.0
 
 
 class YouTubeError(RuntimeError):
@@ -57,10 +62,11 @@ class VideoMeta:
     automatic_caption_langs: list[str]
 
 
-def _ydl_opts(**overrides: Any) -> dict[str, Any]:
+def _ydl_opts(proxy: str | None = None, **overrides: Any) -> dict[str, Any]:
     opts: dict[str, Any] = {
         "quiet": True,
         "no_warnings": True,
+        "noprogress": True,  # `quiet` alone still writes the download progress bar to stdout
         "noplaylist": True,
         "skip_download": True,
         "cachedir": False,  # the container filesystem is read-only
@@ -69,6 +75,8 @@ def _ydl_opts(**overrides: Any) -> dict[str, Any]:
         # channel/search/generic one) is allowed to claim it.
         "allowed_extractors": ["^youtube$"],
     }
+    if proxy:
+        opts["proxy"] = proxy
     opts.update(overrides)
     return opts
 
@@ -78,17 +86,24 @@ def _is_bot_check(exc: Exception) -> bool:
     return "sign in to confirm" in text or "not a bot" in text or " 403" in text
 
 
-def _wrap_error(exc: Exception) -> YouTubeError:
+def _wrap_error(exc: Exception, *, proxied: bool) -> YouTubeError:
+    log.warning("yt_dub: yt-dlp failed (proxied=%s): %s", proxied, exc)
     if _is_bot_check(exc):
+        if proxied:
+            return YouTubeError(
+                "YouTube is blocking the configured proxy too (\"sign in to confirm you're "
+                'not a bot"). The owner needs a fresh proxy identity or another YTDLP_PROXY '
+                "(ADR-014, Revisit when)."
+            )
         return YouTubeError(
             "YouTube is blocking this server's IP (\"sign in to confirm you're not a "
             'bot"). This is a known risk of running yt-dlp from a datacenter host — '
-            "a cookies file or proxy would fix it; ask the owner to add one."
+            "the owner can route yt-dlp through a proxy with YTDLP_PROXY (ADR-014)."
         )
     return YouTubeError(str(exc))
 
 
-def extract_info(url: str) -> dict[str, Any]:
+def extract_info(url: str, *, proxy: str | None = None) -> dict[str, Any]:
     """Single yt-dlp metadata fetch, no download. Free — safe to call before billing."""
     import yt_dlp
 
@@ -99,10 +114,10 @@ def extract_info(url: str) -> dict[str, Any]:
         )
 
     try:
-        with yt_dlp.YoutubeDL(_ydl_opts()) as ydl:
+        with yt_dlp.YoutubeDL(_ydl_opts(proxy)) as ydl:
             info = ydl.extract_info(canonical, download=False)
     except Exception as exc:  # yt-dlp raises broadly by design (DownloadError etc.)
-        raise _wrap_error(exc) from exc
+        raise _wrap_error(exc, proxied=bool(proxy)) from exc
 
     if info is None:
         raise YouTubeError("yt-dlp returned no metadata for this URL.")
@@ -171,18 +186,41 @@ def _parse_vtt(raw: bytes) -> str:
     return _WHITESPACE.sub(" ", " ".join(lines)).strip()
 
 
+def _read_caption(url: str, proxy: str | None) -> bytes:
+    """Caption track bytes: direct with 429 retries, then one attempt through `proxy`."""
+    import yt_dlp
+
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            with yt_dlp.YoutubeDL(_ydl_opts()) as ydl:
+                return ydl.urlopen(url).read()
+        except Exception as exc:
+            if attempt < _CAPTION_ATTEMPTS and "429" in str(exc):
+                log.info("yt_dub: caption fetch rate-limited, retry %d", attempt)
+                time.sleep(_CAPTION_BACKOFF_S * attempt)
+                continue
+            if not proxy:
+                raise
+            log.info("yt_dub: direct caption fetch failed (%s), trying the proxy", exc)
+            break
+
+    with yt_dlp.YoutubeDL(_ydl_opts(proxy)) as ydl:
+        return ydl.urlopen(url).read()
+
+
 def fetch_captions(
     info: dict[str, Any],
     *,
     preferred: list[str],
+    proxy: str | None = None,
 ) -> tuple[str, str] | None:
     """Manual subtitles first, then auto-captions; `preferred` languages in order.
 
     Returns `(text, source)` where source is `"subtitles"` or `"auto_captions"`, or
     None if no track exists in a preferred language.
     """
-    import yt_dlp
-
     for key, source in (("subtitles", "subtitles"), ("automatic_captions", "auto_captions")):
         tracks_by_lang: dict[str, list[dict[str, Any]]] = info.get(key) or {}
         lang = _pick_lang(tracks_by_lang, preferred)
@@ -193,8 +231,7 @@ def fetch_captions(
             continue
         entry, ext = picked
         try:
-            with yt_dlp.YoutubeDL(_ydl_opts()) as ydl:
-                raw = ydl.urlopen(entry["url"]).read()
+            raw = _read_caption(entry["url"], proxy)
         except Exception as exc:
             log.warning("yt_dub: caption fetch failed lang=%s ext=%s: %s", lang, ext, exc)
             continue
@@ -204,7 +241,7 @@ def fetch_captions(
     return None
 
 
-def download_audio(url: str, *, max_bytes: int) -> tuple[bytes, str]:
+def download_audio(url: str, *, max_bytes: int, proxy: str | None = None) -> tuple[bytes, str]:
     """Fallback only: download the smallest audio-only stream, no transcoding.
 
     Raises `YouTubeError` if the result is over `max_bytes` (OpenAI's transcription
@@ -221,6 +258,7 @@ def download_audio(url: str, *, max_bytes: int) -> tuple[bytes, str]:
 
     with tempfile.TemporaryDirectory() as tmp:
         opts = _ydl_opts(
+            proxy,
             format="worstaudio/worst",
             outtmpl=str(Path(tmp) / "%(id)s.%(ext)s"),
             skip_download=False,
@@ -233,7 +271,7 @@ def download_audio(url: str, *, max_bytes: int) -> tuple[bytes, str]:
                 info = ydl.extract_info(canonical, download=True)
                 path = Path(ydl.prepare_filename(info))
         except Exception as exc:
-            raise _wrap_error(exc) from exc
+            raise _wrap_error(exc, proxied=bool(proxy)) from exc
 
         if not path.exists():
             raise YouTubeError("yt-dlp reported success but produced no audio file.")

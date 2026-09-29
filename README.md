@@ -72,6 +72,8 @@ reference). Workflow behaviour knobs (chunk sizes, backstops, prompts) stay in c
 | `BOT_DEFAULT_SOURCE_LANGUAGE` / `BOT_DEFAULT_TARGET_LANGUAGE` | English / Russian | defaults for a new user |
 | `BOT_MAX_JOB_COST_USD` | 10 | refuse a single job estimated above this |
 | `BOT_DAILY_USER_COST_LIMIT_USD` | 25 | per-user rolling 24h cap (admin exempt) |
+| `YTDLP_PROXY` | — | optional proxy for YouTube requests, e.g. the bundled WARP sidecar (ADR-014) |
+| `WARP_ACCEPT_TOS` | — | `yes` starts the WARP sidecar on deploy; you accept Cloudflare's terms |
 | `TELEGRAM_DB_PATH` | `data/telegram_bot.sqlite3` | sqlite location |
 | `LOG_LEVEL` | `INFO` | |
 | `OTEL_*` | off | optional tracing, see below |

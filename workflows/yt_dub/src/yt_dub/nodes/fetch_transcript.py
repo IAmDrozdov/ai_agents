@@ -37,7 +37,7 @@ def _preferred_langs(meta_language: str | None, configured: list[str]) -> list[s
 def build_fetch_transcript_node(
     settings: Settings, config: YtDubConfig, progress: Progress = NO_PROGRESS
 ) -> Runnable:
-    _ = settings
+    proxy = settings.ytdlp_proxy
 
     def _run(state: YtDubState) -> dict:
         if state.get("error"):
@@ -52,7 +52,7 @@ def build_fetch_transcript_node(
 
         progress.phase("fetching", 1)
         try:
-            info = extract_info(url)
+            info = extract_info(url, proxy=proxy)
         except YouTubeError as exc:
             return {**state, "error": str(exc)}
 
@@ -88,7 +88,7 @@ def build_fetch_transcript_node(
 
         preferred = _preferred_langs(meta.language, config.caption_languages)
         try:
-            found = fetch_captions(info, preferred=preferred)
+            found = fetch_captions(info, preferred=preferred, proxy=proxy)
         except YouTubeError as exc:
             return {**base, "error": str(exc)}
 

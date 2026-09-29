@@ -1,6 +1,6 @@
 # ADR-010: YouTube dubbing (`yt_dub`)
 
-Status: Accepted (2026-09-11). Amended 2026-09-13: the dub target language is a per-user setting defaulting to `BOT_DEFAULT_TARGET_LANGUAGE`; "Russian" below was the original operator's default.
+Status: Accepted (2026-09-11). Amended 2026-09-13: the dub target language is a per-user setting defaulting to `BOT_DEFAULT_TARGET_LANGUAGE`; "Russian" below was the original operator's default. Amended 2026-09-20: the block in §5 occurred; ADR-014 adds the optional egress proxy.
 
 ## Decision
 

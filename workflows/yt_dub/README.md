@@ -72,8 +72,9 @@ until you confirm.
 
 YouTube sometimes rejects requests from cloud/datacenter IPs with "Sign in to
 confirm you're not a bot." `providers/youtube.py` surfaces this as a distinct,
-readable error rather than a generic failure. If it happens in production, the fix
-is a cookies file or a proxy — deliberately not built up front (see ADR-010).
+readable error rather than a generic failure. The fix is `YTDLP_PROXY`, optionally
+pointed at the bundled Cloudflare WARP sidecar — off by default, see ADR-014 and
+`.env.example`.
 
 ## Legal note
 
