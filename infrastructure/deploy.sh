@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Deploy the repo to the droplet and (re)start both services.
+# Deploy the repo to the droplet and (re)start its services.
 # Usage: [SSH_KEY=~/.ssh/key] ./infrastructure/deploy.sh [droplet-ip]
 # SSH_KEY is optional; unset means ssh-agent / ~/.ssh/config pick the identity.
 set -euo pipefail
@@ -33,8 +33,8 @@ rsync -az --delete \
   "$REPO_ROOT/" "root@$IP:/opt/ai_agents/src/"
 
 echo "==> uploading bot.env (allow-listed keys only)"
-# Only the bot container needs secrets, plus the BOT_* policy; DO_API_KEY etc. never leave this machine.
-BOT_ENV="$(grep -E '^(OPENAI_API_KEY|TELEGRAM_BOT_TOKEN|ADMIN_TELEGRAM_ID|LOG_LEVEL|YTDLP_PROXY|BOT_[A-Z_]+)=' "$REPO_ROOT/.env" || true)"
+# Only the bot container needs secrets, plus the BOT_*/NOTES_* policy; DO_API_KEY etc. never leave this machine.
+BOT_ENV="$(grep -E '^(OPENAI_API_KEY|TELEGRAM_BOT_TOKEN|ADMIN_TELEGRAM_ID|LOG_LEVEL|YTDLP_PROXY|BOT_[A-Z_]+|NOTES_[A-Z_]+)=' "$REPO_ROOT/.env" || true)"
 for key in OPENAI_API_KEY TELEGRAM_BOT_TOKEN ADMIN_TELEGRAM_ID; do
   grep -q "^$key=." <<<"$BOT_ENV" || { echo "ERROR: $key is not set in .env" >&2; exit 1; }
 done
@@ -68,7 +68,21 @@ ssh "${SSH_OPTS[@]}" "root@$IP" "
   $COMPOSE logs --tail 40 bot >&2
   exit 1
 "
+# Checked after the bot on purpose: a slow notes UI must not read as a failed bot deploy.
+ssh "${SSH_OPTS[@]}" "root@$IP" "
+  for i in \$(seq 1 30); do
+    if curl -fsS http://127.0.0.1:8082/healthz >/dev/null 2>&1; then
+      echo 'OK: notes web healthy'
+      exit 0
+    fi
+    sleep 2
+  done
+  echo 'FAILED: notes-web did not come up in 60s (the bot is up)' >&2
+  $COMPOSE logs --tail 40 notes-web >&2
+  exit 1
+"
 
 echo "==> done"
 echo "    logs:      ssh ${SSH_KEY:+-i $SSH_KEY} root@$IP '$COMPOSE logs -f bot'"
 echo "    dashboard: ssh ${SSH_KEY:+-i $SSH_KEY} -N -L 8081:127.0.0.1:8081 root@$IP   ->   http://localhost:8081"
+echo "    notes:     ssh ${SSH_KEY:+-i $SSH_KEY} -N -L 8082:127.0.0.1:8082 root@$IP   ->   http://localhost:8082"

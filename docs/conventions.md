@@ -31,6 +31,7 @@ Must match `tools/check_layers.py`:
 - `shared/*` must not import `workflows.*`, `interfaces.*`.
 - `workflows/<a>/*` must not import `workflows/<b>/*`.
 - `workflows/*` must not import `interfaces/*`.
+- `apps/*` may import `shared.*` only (plus third-party libs other than transport frameworks); apps use absolute imports (`notes.domain.items`), as they came from their own repo (ADR-015).
 
 ## Config split (ADR-004)
 

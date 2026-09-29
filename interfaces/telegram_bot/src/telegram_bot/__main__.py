@@ -15,6 +15,7 @@ from shared.obs import get_logger
 from . import db
 from .access import AccessMiddleware
 from .handlers import setup_routers
+from .handlers.notes import build_runtime as build_notes_runtime
 from .tracing import init_tracing
 from .worker import JobQueue, worker_loop
 
@@ -44,8 +45,15 @@ async def _run() -> None:
     dp = Dispatcher()
     queue = JobQueue()
     dp["queue"] = queue
+    # Notes is admin-only (ADR-015): if it cannot start, the bot runs without it.
+    try:
+        notes = build_notes_runtime()
+    except Exception:
+        log.exception("notes disabled: could not start the notes store")
+        notes = None
+    dp["notes"] = notes
     dp.update.outer_middleware(AccessMiddleware())
-    setup_routers(dp)
+    setup_routers(dp, notes_enabled=notes is not None)
 
     # Held so the loop task is not garbage collected mid-flight.
     background: set[asyncio.Task[None]] = set()
@@ -57,6 +65,8 @@ async def _run() -> None:
         task = asyncio.create_task(worker_loop(bot, queue))
         background.add(task)
         task.add_done_callback(background.discard)
+        if notes is not None:
+            notes.start_sweeper(bot)
 
     dp.startup.register(on_startup)
     await dp.start_polling(bot)

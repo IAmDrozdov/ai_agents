@@ -1,5 +1,5 @@
 # Build context: repo root (see docker-compose.yml). One image serves both
-# the bot and the dashboard; the service picks its entrypoint via `command`.
+# the bot, the dashboard and the notes web UI; the service picks its entrypoint via `command`.
 FROM python:3.12.8-slim
 
 COPY --from=ghcr.io/astral-sh/uv:0.11 /uv /uvx /bin/
@@ -14,8 +14,10 @@ COPY shared/pyproject.toml shared/
 COPY workflows/doc_translator/pyproject.toml workflows/doc_translator/
 COPY workflows/pdf_tts/pyproject.toml workflows/pdf_tts/
 COPY workflows/yt_dub/pyproject.toml workflows/yt_dub/
+COPY apps/notes/pyproject.toml apps/notes/
 COPY interfaces/smoke/pyproject.toml interfaces/smoke/
 COPY interfaces/telegram_bot/pyproject.toml interfaces/telegram_bot/
+COPY interfaces/notes_web/pyproject.toml interfaces/notes_web/
 RUN uv sync --frozen --no-dev --all-packages --no-install-workspace
 
 COPY . .

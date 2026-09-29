@@ -14,6 +14,7 @@ dependencies = [
     "opentelemetry-exporter-otlp-proto-grpc>=1.27",
     "trafilatura>=1.12",
     "shared",
+    "notes",
     "pdf_tts",
     "doc_translator",
     "yt_dub",
@@ -25,6 +26,7 @@ usage-dashboard = "telegram_bot.dashboard.__main__:main"
 
 [tool.uv.sources]
 shared = { workspace = true }
+notes = { workspace = true }
 pdf_tts = { workspace = true }
 doc_translator = { workspace = true }
 yt_dub = { workspace = true }

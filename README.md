@@ -82,11 +82,22 @@ reference). Workflow behaviour knobs (chunk sizes, backstops, prompts) stay in c
 Models, prices and voices are one catalogue in `shared/src/shared/pricing.py`. Prices
 are estimates; check your OpenAI invoice.
 
+## Notes (admin only)
+
+The admin's bot also works as a save-for-later store (`apps/notes`, ADR-015): any text or
+link you send is saved at once, enriched with its title, author and caption, and filed into
+Sections. A link's reply has a 🤖 button that opens the usual price card for it. Sort and
+tidy on the notes web UI (`notes-web`, loopback `:8082`, SSH tunnel). Invitees never see it.
+Details: `apps/notes/README.md`.
+
 ## Security model
 
 - The bot answers only invited users, in private chats; the admin can revoke anyone.
-- The usage dashboard has **no authentication** by design: bind it to `127.0.0.1` and
-  reach it over an SSH tunnel (see `interfaces/telegram_bot/README.md`, "Dashboard").
+- The usage dashboard and the notes web UI have **no authentication** by design: bind them
+  to `127.0.0.1` and reach them over an SSH tunnel (see `interfaces/telegram_bot/README.md`,
+  "Dashboard", and `apps/notes/README.md`).
+- Link enrichment for notes fetches pages from the bot process through an SSRF guard
+  (public addresses only, every redirect re-checked).
 - In production the containers run read-only and non-root with memory and pid caps,
   and the droplet exposes SSH only (`infrastructure/README.md`).
 - Untrusted documents are parsed inside the bot process; the caps above are the
@@ -99,6 +110,8 @@ are estimates; check your OpenAI invoice.
 - The bot's sqlite database keeps, indefinitely: Telegram ids, usernames, first names,
   filenames, per-job cost and error text, and your `/settings` choices. It's visible on
   the usage dashboard.
+- Notes (admin only) keeps every captured text and link, its fetched title, author,
+  caption and thumbnail URL in `notes.sqlite3`, until you delete it on the web UI.
 - `/revoke` deletes a user and their settings, but their past job rows (the list above)
   stay in the usage log.
 

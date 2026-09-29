@@ -1,21 +1,24 @@
 # infrastructure
 
-Terraform + Docker deployment of the Telegram bot and usage dashboard to a
+Terraform + Docker deployment of the Telegram bot, usage dashboard and notes web UI to a
 single DigitalOcean droplet.
 
 ## What runs where
 
 - **Droplet** (`s-1vcpu-1gb`, ~$6/mo, Ubuntu 24.04 + 2 GB swap): Docker Compose
-  with two containers built from one image —
-  - `bot` — `telegram-bot`, long polling (outbound only, no public ingress)
+  with three containers built from one image —
+  - `bot` — `telegram-bot`, long polling (outbound only, no public ingress); also
+    runs notes Capture and link enrichment for the admin (ADR-015)
   - `dashboard` — `usage-dashboard`, published on the droplet's **loopback only**
     (`127.0.0.1:8081`)
-- **sqlite** lives on the named volume `appdata` (`/data/telegram_bot.sqlite3`);
+  - `notes-web` — `notes-web`, the notes sorting UI, **loopback only** (`127.0.0.1:8082`)
+- **sqlite** lives on the named volume `appdata` (`/data/telegram_bot.sqlite3`,
+  `/data/notes.sqlite3`);
   it survives rebuilds/redeploys and dies only with `docker volume rm` or
   `terraform destroy`.
 - **Firewall**: inbound TCP/22 only; all egress open.
 - **Containers**: non-root, `cap_drop: ALL`, read-only image with `/tmp` in RAM,
-  `pids_limit`, memory caps (bot 700 MB, dashboard 160 MB) — a hostile document
+  `pids_limit`, memory caps (bot 700 MB, dashboard 160 MB, notes-web 160 MB) — a hostile document
   cannot take the host down, only its own container.
 - **Host**: fail2ban (systemd backend), `PermitRootLogin prohibit-password`,
   unattended-upgrades incl. Docker's repo, auto-reboot 04:30 when a kernel lands.
@@ -81,11 +84,11 @@ docker buildx build --platform linux/amd64 -f infrastructure/docker/Dockerfile -
 docker save ai_agents:latest | ssh ${SSH_KEY:+-i "$SSH_KEY"} root@<ip> docker load
 ```
 
-## Dashboard access (SSH tunnel — no auth by design)
+## Dashboard and notes access (SSH tunnel — no auth by design)
 
 ```bash
-ssh ${SSH_KEY:+-i "$SSH_KEY"} -N -L 8081:127.0.0.1:8081 root@<droplet-ip>
-# then open http://localhost:8081
+ssh ${SSH_KEY:+-i "$SSH_KEY"} -N -L 8081:127.0.0.1:8081 -L 8082:127.0.0.1:8082 root@<droplet-ip>
+# then open http://localhost:8081 (usage) and http://localhost:8082 (notes)
 ```
 
 ## Operations
@@ -95,6 +98,9 @@ IP=$(terraform -chdir=infrastructure/terraform output -raw droplet_ipv4)
 ssh ${SSH_KEY:+-i "$SSH_KEY"} root@$IP 'docker compose -f /opt/ai_agents/src/infrastructure/docker/docker-compose.yml logs -f bot'
 # sqlite backup:
 ssh ${SSH_KEY:+-i "$SSH_KEY"} root@$IP 'cat $(docker volume inspect -f "{{.Mountpoint}}" docker_appdata)/telegram_bot.sqlite3' > backup.sqlite3
+# notes run in WAL mode with two writers, so take a consistent snapshot instead of copying the file:
+ssh ${SSH_KEY:+-i "$SSH_KEY"} root@$IP 'C="docker compose -f /opt/ai_agents/src/infrastructure/docker/docker-compose.yml"; $C exec -T bot python -c "import sqlite3; s=sqlite3.connect(\"/data/notes.sqlite3\"); d=sqlite3.connect(\"/tmp/n.sqlite3\"); s.backup(d); d.close()" && $C cp bot:/tmp/n.sqlite3 /root/notes-backup.sqlite3'
+scp ${SSH_KEY:+-i "$SSH_KEY"} root@$IP:/root/notes-backup.sqlite3 ./notes-backup.sqlite3
 ```
 
 ## Teardown
@@ -116,5 +122,5 @@ terraform -chdir=infrastructure/terraform destroy   # deletes droplet AND the sq
   sqlite volume). Apply host changes by hand, or reprovision deliberately.
 - Droplet size is a variable; `s-1vcpu-512mb-10gb` ($4/mo) works but leaves
   little RAM headroom for large PDFs.
-- The dashboard port (8081) is fixed in `docker-compose.yml` and `deploy.sh`; change
+- The dashboard (8081) and notes (8082) ports are fixed in `docker-compose.yml` and `deploy.sh`; change
   both if it collides with something on your host.

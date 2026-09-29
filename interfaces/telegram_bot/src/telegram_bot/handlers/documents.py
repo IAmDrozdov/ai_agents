@@ -357,14 +357,18 @@ async def link_handler(message: Message) -> None:
     url = _first_url(message.text)
     if user is None or url is None:
         return
+    await offer_link(message, url, user.id)
 
+
+async def offer_link(message: Message, url: str, user_id: int) -> None:
+    """Price card for a link, answered in `message`'s chat; also the notes Acknowledgement's entry."""
     if _is_youtube_url(url):
-        await _begin_pending(message, LinkSource(url), user.id, "📡 Fetching video info…")
+        await _begin_pending(message, LinkSource(url), user_id, "📡 Fetching video info…")
         return
 
     status = await message.answer("🔗 Fetching the link…")
     try:
-        article = await _run_intake(user.id, scrape_url, url)
+        article = await _run_intake(user_id, scrape_url, url)
     except ScrapeError as exc:
         await status.edit_text(f"❌ {html.escape(str(exc))}")
         return
@@ -380,7 +384,7 @@ async def link_handler(message: Message) -> None:
     item = Pending(source=source, message_id=status.message_id)
     _remember_pending(message.chat.id, item)
     await status.edit_text("⏳ Estimating…")
-    await _render_actions(status, user.id, item)
+    await _render_actions(status, user_id, item)
 
 
 @router.callback_query(JobCB.filter(F.action == "run"))

@@ -1,0 +1,35 @@
+:root {
+  color-scheme: light dark;
+  --page: #f7f7f5; --surface: #ffffff; --ink: #141414; --muted: #6b6b66; --border: rgba(0,0,0,.12);
+  --accent: #2a78d6;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --page: #111111; --surface: #1b1b1a; --ink: #f2f2ee; --muted: #9a9a93; --border: rgba(255,255,255,.12); }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--page); color: var(--ink); font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+.top { display: flex; align-items: center; gap: 20px; padding: 12px 20px; border-bottom: 1px solid var(--border); background: var(--surface); }
+.brand { font-weight: 700; color: inherit; text-decoration: none; }
+.top nav a { color: var(--muted); text-decoration: none; margin-right: 14px; }
+.wrap { max-width: 960px; margin: 0 auto; padding: 20px 16px 64px; }
+h1 { font-size: 22px; margin: 0 0 16px; }
+.empty { color: var(--muted); }
+.items { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.item { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; display: grid; grid-template-columns: auto 1fr; grid-template-areas: "thumb body" "chips chips"; gap: 8px 12px; }
+.item .thumb { grid-area: thumb; width: 96px; height: 96px; object-fit: cover; border-radius: 8px; background: var(--page); }
+.item .body { grid-area: body; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.item .chips { grid-area: chips; }
+.title { font-weight: 600; color: inherit; overflow-wrap: anywhere; }
+a.title { color: var(--accent); text-decoration: none; }
+.origin { color: var(--muted); font-size: 13px; }
+.annotation { color: var(--ink); }
+.gist { color: var(--muted); }
+details.caption { font-size: 13px; color: var(--muted); }
+details.caption summary { cursor: pointer; }
+details.caption p { white-space: pre-wrap; margin: 6px 0 0; }
+.badge { font-size: 12px; align-self: flex-start; padding: 2px 8px; border-radius: 6px; background: var(--page); border: 1px solid var(--border); }
+.badge.failed { color: #b42318; border-color: #b42318; }
+form.inline { display: inline; }
+form.inline button { font: inherit; font-size: 12px; padding: 3px 10px; border: 1px solid var(--border); border-radius: 6px; background: none; color: var(--accent); cursor: pointer; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; padding: 2px 9px; border-radius: 999px; border: 1px solid var(--chip, var(--border)); color: var(--chip, var(--ink)); background: color-mix(in srgb, var(--chip, var(--border)) 12%, transparent); }

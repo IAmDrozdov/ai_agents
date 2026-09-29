@@ -1,6 +1,7 @@
 # Domain glossary
 
-Terms used across code, docs and reviews. Architecture vocabulary (module,
+Terms used across code, docs and reviews. The notes app has its own glossary,
+`apps/notes/CONTEXT.md`; its **Source** (the platform a Link came from) is not the **Source** below. Architecture vocabulary (module,
 interface, seam, adapter, depth) is the `codebase-design` skill's; this file is the
 product vocabulary.
 

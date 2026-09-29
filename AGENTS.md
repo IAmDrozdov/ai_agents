@@ -3,7 +3,7 @@
 Map. Follow links. No rule duplication here. Humans start at `README.md`.
 
 ## What this is
-Monorepo of local AI workflows exposed through one job contract (`shared.job`, ADR-012) by a private Telegram bot and a terminal smoke runner. New interfaces are thin adapters holding a registry of workflow descriptors. No automated tests (ADR-001).
+Monorepo of local AI workflows exposed through one job contract (`shared.job`, ADR-012) by a private Telegram bot and a terminal smoke runner, plus one stateful app — `apps/notes`, the admin's save-for-later store (ADR-015). New interfaces are thin adapters holding a registry of workflow descriptors. No automated tests (ADR-001).
 
 ## Read first
 1. `docs/architecture.md` — layers, deps, interface exposure flow
@@ -16,16 +16,19 @@ Monorepo of local AI workflows exposed through one job contract (`shared.job`, A
 - New workflow -> `.skills/create-workflow.md`
 - New node -> `.skills/create-node.md`
 - Run a workflow from the terminal -> `uv run smoke <id> <path-or-url>`
+- Notes (app) -> `apps/notes/README.md`; smoke: `uv run notes-smoke <url-or-text>`
 - Domain terms -> `CONTEXT.md`
 - New ADR -> `docs/decisions/NNN-title.md`
 - Deploy bot to droplet -> `.claude/skills/deploy-bot/SKILL.md` (slash: `/deploy-bot`)
 
 ## Hard layer rules (enforced by `tools/check_layers.py` + pre-commit)
-- `interfaces/*` MAY import: `shared.*`, `workflows.<any>`.
+- `interfaces/*` MAY import: `shared.*`, `workflows.<any>`, apps (`notes`).
 - `interfaces/*` MUST NOT import: `langchain`, `langchain_core`, `langchain_community`, `langgraph`, `openai`, `anthropic`.
 - `shared/*` MUST NOT import: `workflows.*`, `interfaces.*`.
 - `workflows/<a>/*` MUST NOT import: `workflows/<b>/*`.
-- `workflows/*` MUST NOT import: `interfaces/*`.
+- `workflows/*` MUST NOT import: `interfaces/*`, apps.
+- `shared/*` MUST NOT import: apps.
+- `apps/*` MUST NOT import: `workflows.*`, `interfaces.*`, another app, `aiogram`/`fastapi`/`starlette`/`uvicorn`.
 
 ## Pre-commit
 Hooks on `git commit`: ruff (`--fix` + format), ty (staged python), check_layers (full repo).

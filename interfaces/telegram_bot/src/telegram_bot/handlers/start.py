@@ -10,7 +10,7 @@ from aiogram.types import Message
 
 from shared.obs import get_logger
 
-from .. import access, db
+from .. import access, db, notes_ui
 
 log = get_logger(__name__)
 
@@ -33,6 +33,10 @@ HELP_TEXT = (
 )
 
 
+def _help_for(user_id: int) -> str:
+    return HELP_TEXT + notes_ui.HELP if access.is_admin(user_id) else HELP_TEXT
+
+
 @router.message(CommandStart())
 async def start_handler(message: Message, command: CommandObject) -> None:
     user = message.from_user
@@ -41,7 +45,7 @@ async def start_handler(message: Message, command: CommandObject) -> None:
 
     if await access.is_allowed(user.id):
         await asyncio.to_thread(db.upsert_user, user.id, user.username, user.first_name)
-        await message.answer(HELP_TEXT)
+        await message.answer(_help_for(user.id))
         return
 
     token = (command.args or "").strip()
@@ -58,4 +62,5 @@ async def start_handler(message: Message, command: CommandObject) -> None:
 
 @router.message(Command("help"))
 async def help_handler(message: Message) -> None:
-    await message.answer(HELP_TEXT)
+    user = message.from_user
+    await message.answer(_help_for(user.id) if user else HELP_TEXT)

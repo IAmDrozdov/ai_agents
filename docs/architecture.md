@@ -5,6 +5,7 @@
 ```text
 interfaces/   -> transport adapters: a registry of workflow descriptors + presentation
 workflows/*   -> business logic + orchestration, exposed as one job descriptor each
+apps/*        -> stateful products with their own domain and store, used by interfaces (ADR-015)
 shared/       -> env/settings, the job contract, pricing, document intake, provider stages
 ```
 
@@ -12,11 +13,13 @@ shared/       -> env/settings, the job contract, pricing, document intake, provi
 
 Source of truth: `tools/check_layers.py`.
 
-- `interfaces/*` MAY import `shared.*`, `workflows.<any>`.
+- `interfaces/*` MAY import `shared.*`, `workflows.<any>`, apps (`notes`).
 - `interfaces/*` MUST NOT import `langchain*`, `langgraph*`, `openai`, `anthropic`.
-- `shared/*` MUST NOT import `workflows.*`, `interfaces.*`.
+- `shared/*` MUST NOT import `workflows.*`, `interfaces.*`, apps.
 - `workflows/<a>/*` MUST NOT import `workflows/<b>/*`.
-- `workflows/*` MUST NOT import `interfaces/*`.
+- `workflows/*` MUST NOT import `interfaces/*` or apps.
+- `apps/*` MAY import `shared.*`; MUST NOT import `workflows.*`, `interfaces.*`, another app,
+  or `aiogram`/`fastapi`/`starlette`/`uvicorn`. Apps report outward through callbacks.
 
 ## Job contract (ADR-012)
 
@@ -65,6 +68,21 @@ interfaces/smoke/src/smoke/
 └── registry.py
 ```
 
+## Apps (ADR-015)
+
+An app is not a job: it keeps state across messages (an Item store, background retries), so
+it does not go through `shared.job`. Shape:
+
+```text
+apps/notes/
+├── pyproject.toml, README.md, CONTEXT.md (own glossary), docs/ (ADRs, spec, tickets)
+└── src/notes/          domain/, db.py, enrich/, classify/, sweeper.py, smoke.py
+```
+
+Its interfaces follow the same thin-adapter rule: `telegram_bot/handlers/notes.py` and
+`notes_ui.py` parse and render, `interfaces/notes_web` serves the web UI. The admin's
+messages reach the notes router before `documents` (save first); invitees never do.
+
 ## Thin-adapter rule
 
 Interfaces do transport only:
@@ -92,3 +110,5 @@ state dicts.
 | data fetch | `workflows/<name>/providers/*` |
 | descriptor (preview/estimate/run) | `workflows/<name>/runtime.py` |
 | tracing bootstrap | `shared/obs/tracing.py` |
+| notes domain, store, enrichment, classifier port | `apps/notes/src/notes/*` |
+| notes Telegram presentation / web UI | `telegram_bot/notes_ui.py`, `handlers/notes.py` / `interfaces/notes_web` |

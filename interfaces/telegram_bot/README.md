@@ -93,6 +93,13 @@ re-priced at Run) would exceed it; the admin is exempt. The window is fixed in `
 - `/help`, `/settings`, `/status`, `/cancel`
 - `/invite`, `/users`, `/revoke <telegram_id>` — admin only
 
+## Notes (admin only)
+
+`handlers/notes.py` sits before `documents`: the admin's non-command text and links become notes
+Items (`apps/notes`, ADR-015), acknowledged in Russian (`notes_ui.py`) and enriched in the
+background. The 🤖 button on a link runs `documents.offer_link`, the same flow a pasted link
+takes for everyone else. The notes sweeper starts next to the worker in `__main__.py`.
+
 ## Dashboard
 
 - `GET /` — totals, by-user and by-user×agent aggregates, call history

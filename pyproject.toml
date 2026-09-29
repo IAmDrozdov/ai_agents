@@ -10,7 +10,7 @@ requires-python = ">=3.12"
 Repository = "https://github.com/IAmDrozdov/ai_agents"
 
 [tool.uv.workspace]
-members = ["shared", "workflows/*", "interfaces/*"]
+members = ["shared", "workflows/*", "apps/*", "interfaces/*"]
 
 [dependency-groups]
 dev = [
@@ -28,4 +28,4 @@ select = ["E", "F", "I", "B", "UP", "SIM"]
 ignore = ["E501"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["shared", "doc_translator", "pdf_tts", "yt_dub", "telegram_bot", "smoke"]
+known-first-party = ["shared", "doc_translator", "pdf_tts", "yt_dub", "notes", "notes_web", "telegram_bot", "smoke"]

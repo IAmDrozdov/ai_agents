@@ -25,6 +25,11 @@ class Settings(BaseSettings):
     bot_max_job_cost_usd: float = 10.0
     bot_daily_user_cost_limit_usd: float = 25.0
 
+    # Notes (apps/notes, ADR-015): the admin's save-for-later store.
+    notes_db_path: str = "data/notes.sqlite3"
+    notes_enrich_sweep_seconds: int = 60
+    notes_classifier_provider: str = "fake"
+
     log_level: str = "INFO"
     otel_enabled: bool = False
     otel_service_namespace: str = "ai_agents"

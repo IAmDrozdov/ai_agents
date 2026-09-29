@@ -32,6 +32,7 @@ services:
     environment:
       OTEL_ENABLED: "false"
       TELEGRAM_DB_PATH: /data/telegram_bot.sqlite3
+      NOTES_DB_PATH: /data/notes.sqlite3
     volumes:
       - appdata:/data
     networks:
@@ -53,6 +54,23 @@ services:
       - appdata:/data
     ports:
       - "127.0.0.1:8081:8081"
+    depends_on:
+      - bot
+
+  # Notes web UI (ADR-015): same loopback-only publish as the dashboard, no secrets.
+  notes-web:
+    <<: *hardening
+    image: ai_agents:latest
+    command: notes-web --host 0.0.0.0 --port 8082
+    mem_limit: 160m
+    memswap_limit: 160m
+    environment:
+      OTEL_ENABLED: "false"
+      NOTES_DB_PATH: /data/notes.sqlite3
+    volumes:
+      - appdata:/data
+    ports:
+      - "127.0.0.1:8082:8082"
     depends_on:
       - bot
 
