@@ -13,7 +13,7 @@ Three workflows, one job contract, two interfaces:
 
 - **Telegram bot** (`interfaces/telegram_bot`): send a file or link, get a card with
   every applicable workflow priced and ETA'd, tap one to run. Languages, models and
-  voice are per user. Invite-only. Usage dashboard on localhost.
+  voice are per user. Invite-only. The admin also gets a Mini App for notes and usage.
 - **Smoke runner** (`interfaces/smoke`): the same contract from the terminal —
   preview, price, confirm, run, write the result.
 
@@ -57,6 +57,9 @@ uv run smoke yt_dub https://www.youtube.com/watch?v=...
 Commands: `/settings` (languages, models, voice — remembered per user), `/status`,
 `/cancel`, `/help`. Details: `interfaces/telegram_bot/README.md`.
 
+The admin's Mini App (notes and usage) needs a public HTTPS URL: set up Tailscale Funnel as in
+`infrastructure/README.md`, then put the address in `BOT_MINIAPP_URL`.
+
 ## Configuration
 
 Everything an operator changes lives in `.env` (`.env.example` is the commented
@@ -74,6 +77,8 @@ reference). Workflow behaviour knobs (chunk sizes, backstops, prompts) stay in c
 | `BOT_DAILY_USER_COST_LIMIT_USD` | 25 | per-user rolling 24h cap (admin exempt) |
 | `YTDLP_PROXY` | — | optional proxy for YouTube requests, e.g. the bundled WARP sidecar (ADR-014) |
 | `WARP_ACCEPT_TOS` | — | `yes` starts the WARP sidecar on deploy; you accept Cloudflare's terms |
+| `BOT_MINIAPP_URL` | — | public HTTPS URL of the admin Mini App (the 📒 button); empty = no button |
+| `TS_AUTHKEY` | — | Tailscale auth key: deploy starts the Funnel sidecar that publishes the Mini App (ADR-016) |
 | `TELEGRAM_DB_PATH` | `data/telegram_bot.sqlite3` | sqlite location |
 | `LOG_LEVEL` | `INFO` | |
 | `OTEL_*` | off | optional tracing, see below |
@@ -87,16 +92,16 @@ are estimates; check your OpenAI invoice.
 The admin's bot also works as a save-for-later store (`apps/notes`, ADR-015). Any text or
 link you send gets one card: 💾 save to notes, the priced agents (translate, voice, dub), or
 Cancel. A saved item is enriched with its title, author and caption and filed into
-Sections; its 🤖 button brings the agents back later. Sort and
-tidy on the notes web UI (`notes-web`, loopback `:8082`, SSH tunnel). Invitees never see it.
+Sections; its 🤖 button brings the agents back later. Browse, sort and
+tidy them in the Mini App (the 📒 button in your chat, ADR-016). Invitees never see it.
 Details: `apps/notes/README.md`.
 
 ## Security model
 
 - The bot answers only invited users, in private chats; the admin can revoke anyone.
-- The usage dashboard and the notes web UI have **no authentication** by design: bind them
-  to `127.0.0.1` and reach them over an SSH tunnel (see `interfaces/telegram_bot/README.md`,
-  "Dashboard", and `apps/notes/README.md`).
+- The Mini App is public over HTTPS (Tailscale Funnel), but every API call needs Telegram-signed
+  data from the admin: HMAC-checked, at most 24 h old, admin id only (ADR-016). Its container
+  holds a key derived from the bot token, never the token.
 - Link enrichment for notes fetches pages from the bot process through an SSRF guard
   (public addresses only, every redirect re-checked).
 - In production the containers run read-only and non-root with memory and pid caps,
@@ -109,10 +114,10 @@ Details: `apps/notes/README.md`.
 - Document text, transcripts and pasted-link content are sent to OpenAI to translate,
   transcribe or synthesize. No document text, transcript or audio is stored by the bot.
 - The bot's sqlite database keeps, indefinitely: Telegram ids, usernames, first names,
-  filenames, per-job cost and error text, and your `/settings` choices. It's visible on
-  the usage dashboard.
+  filenames, per-job cost and error text, and your `/settings` choices. It's visible in
+  the Mini App's usage tab.
 - Notes (admin only) keeps every captured text and link, its fetched title, author,
-  caption and thumbnail URL in `notes.sqlite3`, until you delete it on the web UI.
+  caption and thumbnail URL in `notes.sqlite3`, until you delete it in the Mini App.
 - `/revoke` deletes a user and their settings, but their past job rows (the list above)
   stay in the usage log.
 
@@ -125,7 +130,7 @@ that fallback is your decision and your risk (ADR-010).
 ## Deploy (optional)
 
 `infrastructure/` provisions one DigitalOcean droplet with Terraform and deploys the bot
-and dashboard with Docker Compose (`./infrastructure/deploy.sh`). See
+and the Mini App with Docker Compose (`./infrastructure/deploy.sh`). See
 `infrastructure/README.md`. AI-agent users can run the `/deploy-bot` skill.
 
 ## Observability (optional)
@@ -138,7 +143,7 @@ scaffolding. See `docs/observability/tracing-elk.md`.
 
 - `shared/` — settings, logging, the job contract, pricing, document intake, translate/speech/STT stages
 - `workflows/<name>/` — workflow business logic (graph/nodes) + its job descriptor (`runtime.py`)
-- `interfaces/telegram_bot/` — the Telegram bot + usage dashboard
+- `interfaces/telegram_bot/` — the Telegram bot + the admin Mini App
 - `interfaces/smoke/` — terminal runner over the same job contract
 - `infrastructure/` — Terraform + Docker deployment to a DigitalOcean droplet
 - `docs/` — architecture, conventions, ADRs

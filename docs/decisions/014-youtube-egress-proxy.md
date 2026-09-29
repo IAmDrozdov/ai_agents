@@ -69,8 +69,8 @@ that worked when measured, not a guarantee.
 - `deploy.sh`'s allow-list gains `YTDLP_PROXY` (amends ADR-008's list).
 - Turning WARP off later: remove both `.env` lines, redeploy, then on the host
   `docker compose -f /opt/ai_agents/src/infrastructure/docker/docker-compose.yml --profile warp rm -sf warp`.
-- The sidecar sits on its own `egress` network with the bot only; the dashboard
-  cannot reach the unauthenticated SOCKS5 listener.
+- The sidecar sits on its own `egress` network with the bot only; the other services (the
+  Mini App, formerly the dashboard) cannot reach the unauthenticated SOCKS5 listener.
 
 ## Revisit when
 

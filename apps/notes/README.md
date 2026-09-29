@@ -2,7 +2,7 @@
 
 The admin's "save for later" store: links and text sent to the Telegram bot are saved at once,
 enriched (title, author, caption, thumbnail), filed into Sections with a Russian Gist, and sorted
-on a private web UI. Merged in from the standalone `maxi-notes` repo (ADR-015).
+in the admin Mini App (ADR-016). Merged in from the standalone `maxi-notes` repo (ADR-015).
 
 - Vocabulary: `CONTEXT.md` (separate from the repo glossary: **Source** means something else here)
 - Decisions: `docs/decisions/0001–0006` · Spec: `docs/spec.md` · Tickets: `docs/tickets/`
@@ -15,7 +15,7 @@ on a private web UI. Merged in from the standalone `maxi-notes` repo (ADR-015).
 | `interfaces/telegram_bot/…/handlers/documents.py` | the admin's ask-first card (`admin_input_handler`, 💾 on the price card) |
 | `interfaces/telegram_bot/…/handlers/notes.py` | 💾 saving, the 🤖 and ↩️ buttons, background enrichment and the sweeper |
 | `interfaces/telegram_bot/…/notes_ui.py` | Acknowledgement text and keyboard (Russian) |
-| `interfaces/notes_web/` | the web UI (`notes-web`) |
+| `interfaces/telegram_bot/…/miniapp/` | the Mini App: notes API and UI (`telegram-miniapp`) |
 
 ## Run
 
@@ -23,11 +23,12 @@ on a private web UI. Merged in from the standalone `maxi-notes` repo (ADR-015).
 uv run notes-smoke https://youtu.be/dQw4w9WgXcQ   # fetch + file one input, print the result
 uv run notes-smoke http://169.254.169.254/         # the SSRF guard refuses it
 uv run telegram-bot                                # 💾 on the card for ADMIN_TELEGRAM_ID
-uv run notes-web                                   # http://127.0.0.1:8082
+uv run telegram-miniapp                            # http://127.0.0.1:8083, opened from Telegram
 ```
 
 Both processes share the sqlite file at `NOTES_DB_PATH` (WAL mode). The schema and the starter
-Sections are created on first start.
+Sections are created on first start. The Mini App only accepts Telegram-signed requests, so
+check it as in `docs/verifying.md` §2.
 
 | Variable | Default | Meaning |
 |---|---|---|
@@ -39,7 +40,8 @@ Sections are created on first start.
 ## Status
 
 Tickets 01–04 were done in maxi-notes: a Note on the web, deploy, Links with dedupe, and
-Enrichment without an LLM. 05 (OpenAI Classifier) was done here. Next up are 06 (Filing keyboard), 07 (Browse),
-08 (sorting pass on the web), 09 (Section management) and 10 (housekeeping). Their "(seam N)"
-criteria predate the merge: check them by hand or with `notes-smoke`, since this repo has no
-automated tests (ADR-001).
+Enrichment without an LLM. 05 (OpenAI Classifier) was done here. 11 is the Mini App skeleton, 08
+the sorting pass and 09 Section management in it (ADR-016). 06 (Filing keyboard) and 07 (Browse)
+are replaced by the app. 10 (housekeeping) is next. Their "(seam N)"
+criteria predate the merge: check them by hand, with `notes-smoke` or with signed requests to the
+Mini App API, since this repo has no automated tests (ADR-001).

@@ -31,6 +31,11 @@ class Settings(BaseSettings):
     notes_classifier_provider: str = "fake"  # fake | openai
     notes_classifier_model: str = ""  # empty = shared.pricing.DEFAULT_TRANSLATE_MODEL
 
+    # Admin Mini App (ADR-016): its public HTTPS URL; empty = no menu button, no ✏️ button.
+    bot_miniapp_url: str = ""
+    # hex HMAC_SHA256("WebAppData", bot token) for the miniapp container; empty = derive from the token.
+    miniapp_init_secret: SecretStr | None = None
+
     log_level: str = "INFO"
     otel_enabled: bool = False
     otel_service_namespace: str = "ai_agents"

@@ -39,40 +39,51 @@ services:
       - default
       - egress
 
-  dashboard:
+  # Admin Mini App (ADR-016): every /api call needs Telegram-signed initData from the admin.
+  # Holds a derived HMAC key (miniapp.env), never the bot token. The loopback publish is only
+  # for deploy.sh's health check; the funnel sidecar reaches it over the compose network.
+  miniapp:
     <<: *hardening
     image: ai_agents:latest
-    # Binds 0.0.0.0 INSIDE the container; the host-side publish below pins it
-    # to the droplet's loopback, so it is only reachable via SSH tunnel.
-    command: usage-dashboard --host 0.0.0.0 --port 8081
+    command: telegram-miniapp --host 0.0.0.0 --port 8083
+    env_file: /opt/ai_agents/miniapp.env
     mem_limit: 160m
     memswap_limit: 160m
     environment:
       OTEL_ENABLED: "false"
       TELEGRAM_DB_PATH: /data/telegram_bot.sqlite3
-    volumes:
-      - appdata:/data
-    ports:
-      - "127.0.0.1:8081:8081"
-    depends_on:
-      - bot
-
-  # Notes web UI (ADR-015): same loopback-only publish as the dashboard, no secrets.
-  notes-web:
-    <<: *hardening
-    image: ai_agents:latest
-    command: notes-web --host 0.0.0.0 --port 8082
-    mem_limit: 160m
-    memswap_limit: 160m
-    environment:
-      OTEL_ENABLED: "false"
       NOTES_DB_PATH: /data/notes.sqlite3
     volumes:
       - appdata:/data
     ports:
-      - "127.0.0.1:8082:8082"
+      - "127.0.0.1:8083:8083"
     depends_on:
       - bot
+
+  # Optional (profile "funnel", ADR-016): publishes miniapp over HTTPS through Tailscale Funnel.
+  # An outbound-only userspace node: no inbound port, and tsstate keeps its identity across restarts.
+  funnel:
+    <<: *hardening
+    profiles: ["funnel"]
+    image: tailscale/tailscale:v1.102.5
+    env_file: /opt/ai_agents/funnel.env
+    mem_limit: 96m
+    memswap_limit: 96m
+    environment:
+      TS_HOSTNAME: ai-agents
+      TS_STATE_DIR: /var/lib/tailscale
+      TS_USERSPACE: "true"
+      TS_AUTH_ONCE: "true"
+      TS_SERVE_CONFIG: /config/serve.json
+    # containerboot keeps its socket under /var/run, which the read-only root would refuse.
+    tmpfs:
+      - /tmp
+      - /var/run
+    volumes:
+      - tsstate:/var/lib/tailscale
+      - ./tailscale/serve.json:/config/serve.json:ro
+    depends_on:
+      - miniapp
 
   # Optional (profile "warp", ADR-014): free Cloudflare WARP egress for yt-dlp.
   # Reached only by the bot, over the `egress` network, as socks5h://warp:40000; no published port.
@@ -97,3 +108,4 @@ networks:
 volumes:
   appdata:
   warpdata:
+  tsstate:

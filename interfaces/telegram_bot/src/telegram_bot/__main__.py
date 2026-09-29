@@ -7,7 +7,8 @@ import sys
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
-from aiogram.types import BotCommand
+from aiogram.exceptions import TelegramAPIError
+from aiogram.types import BotCommand, MenuButtonDefault, MenuButtonWebApp, WebAppInfo
 
 from shared.config import settings
 from shared.obs import get_logger
@@ -27,6 +28,25 @@ COMMANDS = [
     BotCommand(command="status", description="Current and queued jobs"),
     BotCommand(command="cancel", description="Cancel your queued jobs"),
 ]
+
+MENU_BUTTON_TEXT = "📒"  # Telegram adds its own app icon; a word would squeeze the message field
+
+
+async def set_admin_menu_button(bot: Bot) -> None:
+    """Point the admin's menu button at the Mini App, or back to the default (ADR-016)."""
+    admin = settings.admin_telegram_id
+    if admin is None:
+        return
+    url = settings.bot_miniapp_url.strip()
+    button = (
+        MenuButtonWebApp(text=MENU_BUTTON_TEXT, web_app=WebAppInfo(url=url))
+        if url
+        else MenuButtonDefault()
+    )
+    try:
+        await bot.set_chat_menu_button(chat_id=admin, menu_button=button)
+    except TelegramAPIError as exc:  # e.g. the admin never opened the chat with the bot
+        log.warning("could not set the admin's menu button: %s", exc)
 
 
 async def _run() -> None:
@@ -62,6 +82,7 @@ async def _run() -> None:
         me = await bot.me()
         log.info("polling as @%s (id=%s)", me.username, me.id)
         await bot.set_my_commands(COMMANDS)
+        await set_admin_menu_button(bot)
         task = asyncio.create_task(worker_loop(bot, queue))
         background.add(task)
         task.add_done_callback(background.discard)

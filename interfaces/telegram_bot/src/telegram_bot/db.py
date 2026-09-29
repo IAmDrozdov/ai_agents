@@ -2,7 +2,7 @@
 
 All helpers are synchronous; async callers wrap them in ``asyncio.to_thread``.
 Connections are opened per call (WAL mode), which is thread-safe by construction
-and lets the dashboard read while the bot writes.
+and lets the Mini App read while the bot writes.
 """
 
 from __future__ import annotations
@@ -238,7 +238,7 @@ def finish_job(
     output_size_bytes: int | None = None,
 ) -> None:
     # input_tokens / output_tokens / tts_chars_billed columns stay in the schema for old
-    # rows and the dashboard, but are no longer written; stats_json carries cost lines.
+    # rows and the usage view, but are no longer written; stats_json carries cost lines.
     with _connect() as conn:
         conn.execute(
             "UPDATE jobs SET status=?, error=?, stats_json=?, cost_usd=?, char_count=?, "
@@ -291,7 +291,7 @@ def recent_job_samples(agent: str, limit: int = 30) -> list[dict[str, Any]]:
     return out
 
 
-# --- dashboard queries -----------------------------------------------------
+# --- usage queries (Mini App) -----------------------------------------------------
 
 
 def query_history(limit: int = 200) -> list[dict[str, Any]]:
@@ -335,6 +335,17 @@ def query_by_user_agent() -> list[dict[str, Any]]:
             "SUM(COALESCE(input_tokens, 0) + COALESCE(output_tokens, 0)) AS tokens, "
             "ROUND(SUM(COALESCE(cost_usd, 0)), 4) AS cost_usd "
             "FROM jobs GROUP BY telegram_id, agent ORDER BY telegram_id, agent"
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def query_daily_cost(days: int) -> list[dict[str, Any]]:
+    """Cost per UTC day over the last `days` days, today included; days without jobs are absent."""
+    with _connect(readonly=True) as conn:
+        rows = conn.execute(
+            "SELECT date(created_at) AS day, ROUND(SUM(COALESCE(cost_usd, 0)), 4) AS cost_usd "
+            "FROM jobs WHERE created_at >= date('now', ?) GROUP BY day ORDER BY day",
+            (f"-{int(days) - 1} days",),
         ).fetchall()
     return [dict(row) for row in rows]
 

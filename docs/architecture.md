@@ -61,6 +61,7 @@ interfaces/telegram_bot/src/telegram_bot/
 ├── registry.py         RegistryEntry per workflow (label, hint keys, build_config)
 ├── handlers/           transport: intake → estimate card → run
 ├── worker.py           FIFO queue, runs WORKFLOW.run, delivers Result
+├── miniapp/            the admin Mini App: signed JSON API + static shell (ADR-016)
 └── ...
 
 interfaces/smoke/src/smoke/
@@ -80,7 +81,7 @@ apps/notes/
 ```
 
 Its interfaces follow the same thin-adapter rule: `telegram_bot/handlers/notes.py` and
-`notes_ui.py` parse and render, `interfaces/notes_web` serves the web UI. The admin's text
+`notes_ui.py` parse and render, `telegram_bot/miniapp` serves the Mini App (ADR-016). The admin's text
 and links get the usual price card with a 💾 button on top (`documents.admin_input_handler`);
 invitees never see 💾.
 
@@ -112,4 +113,4 @@ state dicts.
 | descriptor (preview/estimate/run) | `workflows/<name>/runtime.py` |
 | tracing bootstrap | `shared/obs/tracing.py` |
 | notes domain, store, enrichment, classifier port | `apps/notes/src/notes/*` |
-| notes Telegram presentation / web UI | `telegram_bot/notes_ui.py`, `handlers/notes.py` / `interfaces/notes_web` |
+| notes Telegram presentation / Mini App | `telegram_bot/notes_ui.py`, `handlers/notes.py` / `telegram_bot/miniapp` |

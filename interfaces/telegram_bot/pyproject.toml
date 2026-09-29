@@ -12,6 +12,7 @@ dependencies = [
     "opentelemetry-api>=1.27",
     "opentelemetry-sdk>=1.27",
     "opentelemetry-exporter-otlp-proto-grpc>=1.27",
+    "pydantic>=2.7",
     "trafilatura>=1.12",
     "shared",
     "notes",
@@ -22,7 +23,7 @@ dependencies = [
 
 [project.scripts]
 telegram-bot = "telegram_bot.__main__:main"
-usage-dashboard = "telegram_bot.dashboard.__main__:main"
+telegram-miniapp = "telegram_bot.miniapp.__main__:main"
 
 [tool.uv.sources]
 shared = { workspace = true }

@@ -6,7 +6,7 @@ description: Deploy the current code to the Telegram bot droplet and verify it i
 # Deploy the Telegram bot to the DigitalOcean droplet
 
 Push-based deploy: rsync the repo to the droplet, build the Docker image there,
-restart the containers (`bot`, `dashboard`, `notes-web`; `warp` when enabled), then verify.
+restart the containers (`bot`, `miniapp`; `funnel` and `warp` when enabled), then verify.
 Full infra docs: `infrastructure/README.md` (ADR-008); what each service does:
 `docs/runtime.md`.
 
@@ -14,6 +14,9 @@ Full infra docs: `infrastructure/README.md` (ADR-008); what each service does:
 
 - `.env` at repo root has `OPENAI_API_KEY`, `TELEGRAM_BOT_TOKEN`, `ADMIN_TELEGRAM_ID`. Only the
   allow-listed keys reach the droplet (`deploy.sh`); a new env var needs the regex there too.
+- Optional Mini App publishing: `TS_AUTHKEY` and `BOT_MINIAPP_URL` in `.env` (Tailscale Funnel; the
+  one-time owner steps are in `infrastructure/README.md`), and `python3` on your PATH, because
+  `deploy.sh` derives the Mini App's key from the bot token locally.
 - `infrastructure/terraform/terraform.tfvars` names your DO SSH key (`ssh_key_name`);
   optionally `export SSH_KEY=~/.ssh/<key>` for the matching private key (unset means
   ssh-agent / `~/.ssh/config`).
@@ -35,7 +38,8 @@ Full infra docs: `infrastructure/README.md` (ADR-008); what each service does:
    ./infrastructure/deploy.sh
    ```
    Takes ~2–4 min (rsync + on-droplet `docker compose build` + `up -d`). It waits for the bot
-   and dashboard first, then notes-web separately. A failed build stops before `up -d`, so the
+   and the Mini App, then checks the public Mini App URL when Funnel is on (a warning, not a
+   failure: the first certificate can take minutes). A failed build stops before `up -d`, so the
    old containers keep running.
    If the on-droplet build OOMs or fails, use the buildx fallback in
    `infrastructure/README.md`.
@@ -45,16 +49,18 @@ Full infra docs: `infrastructure/README.md` (ADR-008); what each service does:
    IP=$(terraform -chdir=infrastructure/terraform output -raw droplet_ipv4)
    ssh ${SSH_KEY:+-i "$SSH_KEY"} root@$IP 'docker ps --format "{{.Names}}: {{.Status}}"'
    ssh ${SSH_KEY:+-i "$SSH_KEY"} root@$IP 'docker logs docker-bot-1 2>&1 | tail -5'
-   ssh ${SSH_KEY:+-i "$SSH_KEY"} root@$IP 'curl -s http://127.0.0.1:8081/healthz; curl -s http://127.0.0.1:8082/healthz'
+   ssh ${SSH_KEY:+-i "$SSH_KEY"} root@$IP 'curl -s http://127.0.0.1:8083/healthz'
+   curl -s "$BOT_MINIAPP_URL/healthz"   # public, when Funnel is on
    ```
    Expected: all containers `Up`; bot log ends with
    `polling as @<your-bot-username>` and `worker loop started`, with no tracebacks and no
-   `notes disabled`; both healthz return `{"status":"ok"}`. For regression checks that cost
-   nothing (agent previews in the new image, `notes-smoke`), see `docs/verifying.md` §4.
+   `notes disabled`; healthz returns `{"status":"ok"}`. For regression checks that cost
+   nothing (agent previews in the new image, `notes-smoke`), see `docs/verifying.md` §4; the
+   real-chat check in Telegram Web is `docs/verifying.md` §5.
 
 4. **Report** — state what was deployed (branch/diff summary), the verification
-   results, and the dashboard tunnel command:
-   `ssh ${SSH_KEY:+-i "$SSH_KEY"} -N -L 8081:127.0.0.1:8081 -L 8082:127.0.0.1:8082 root@$IP`
+   results, and the Mini App URL (`BOT_MINIAPP_URL`): the owner opens it with the 📒 button in
+   the bot chat.
 
 ## Rollback
 

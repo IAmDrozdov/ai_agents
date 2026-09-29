@@ -1,6 +1,6 @@
 # ADR-015: An `apps/` layer, and Notes merged in from maxi-notes
 
-Status: Accepted (2026-09-29)
+Status: Accepted (2026-09-29). Amended 2026-09-29: decision 3's `notes-web` sorting UI is replaced by the Mini App (ADR-016).
 
 ## Context
 

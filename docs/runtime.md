@@ -10,15 +10,15 @@ the notes path or the deploy. Shorthand: `telegram_bot/x.py` and `handlers/x.py`
 | Service | Entry point | Does | Reads / writes |
 |---|---|---|---|
 | `bot` | `telegram-bot` (`telegram_bot/__main__.py`) | Telegram long polling. Answers users, prices cards, runs one job at a time (`worker.worker_loop`), and runs notes enrichment plus the notes sweeper | `telegram_bot.sqlite3` rw, `notes.sqlite3` rw, OpenAI, YouTube, the web |
-| `dashboard` | `usage-dashboard` (`telegram_bot/dashboard`) | Usage and cost pages, `127.0.0.1:8081` | `telegram_bot.sqlite3` read |
-| `notes-web` | `notes-web` (`interfaces/notes_web`) | Notes list and re-enrich, `127.0.0.1:8082` | `notes.sqlite3` rw |
+| `miniapp` | `telegram-miniapp` (`telegram_bot/miniapp`) | The admin Mini App: a public static shell plus a signed JSON API for notes and usage, `127.0.0.1:8083` (ADR-016) | `telegram_bot.sqlite3` read, `notes.sqlite3` rw |
+| `funnel` (profile) | `tailscale/tailscale` | Publishes `miniapp` over HTTPS through Tailscale Funnel, outbound only (ADR-016) | `tsstate` volume |
 | `warp` (profile) | wireproxy | SOCKS5 egress for yt-dlp only (ADR-014) | — |
 | — | `smoke`, `notes-smoke` | Terminal-only reference runs (ADR-001) | local files |
 
-The services have no network links to each other. They share only the `appdata` volume
-(`/data/*.sqlite3`, WAL mode, a connection per call). The bot reaches `warp` through
-`YTDLP_PROXY=socks5h://warp:40000`. Nothing is exposed publicly: Telegram is polled outbound,
-and both web UIs are reached through an SSH tunnel.
+The services share only the `appdata` volume (`/data/*.sqlite3`, WAL mode, a connection per
+call). The bot reaches `warp` through `YTDLP_PROXY=socks5h://warp:40000`, and `funnel` reaches
+`miniapp` at `http://miniapp:8083`. The droplet accepts inbound SSH only: Telegram is polled
+outbound, and the Mini App is published by the funnel sidecar's outbound tunnel.
 
 ## The three agents (workflows, ADR-012)
 
@@ -93,7 +93,24 @@ saved link, 🤖 runs `documents.offer_link` again. `apps/*` never imports aiogr
 passes `notify` in as a callback. If notes fails to start, the bot runs without it and 💾
 answers "Notes are unavailable".
 
-Language: the bot UI is English; notes texts and the notes web UI are Russian.
+Language: the bot UI is English; notes texts and the Mini App are Russian.
+
+## Admin Mini App (`telegram_bot/miniapp`, ADR-016)
+
+While `BOT_MINIAPP_URL` is set, the bot gives the admin's chat a `📒` menu button
+(`__main__.set_admin_menu_button`, at startup, for that chat only), and every saved-item message
+a `✏️ Открыть` button (`notes_ui.item_keyboard`, a `web_app` button with `/?item=<id>`). Both open
+the `miniapp` service through the funnel sidecar: a static shell (`miniapp/static`, vanilla JS)
+that calls `/api/usage` and `/api/notes/*`. The Заметки tab filters, pages, edits an item
+(Sections, Status, Placement, Annotation, Reviewed), re-enriches, deletes a trashed one, and runs
+the bulk actions. The Секции tab creates, edits, reorders and deletes Sections. Enrichment never
+overwrites the Sections of an Item the Owner has already reviewed.
+
+Every `/api` call carries `Authorization: tma <initData>`. `miniapp/auth.py` checks Telegram's
+HMAC against `MINIAPP_INIT_SECRET`, requires `auth_date` under 24 h and admits only
+`ADMIN_TELEGRAM_ID` (401 or 403). The API only parses and serialises; the rules stay in
+`apps/notes`. A re-enrich from the app flips the Item to `pending` and the bot's sweeper does
+the work. Edits made in the app do not re-render Acknowledgement messages in the chat.
 
 ## State that lives only in memory
 
@@ -114,7 +131,9 @@ up anything left `pending` from sqlite.
   - `.env.example`;
   - the allow-list regex in `infrastructure/deploy.sh` (only `OPENAI_API_KEY`,
     `TELEGRAM_BOT_TOKEN`, `ADMIN_TELEGRAM_ID`, `LOG_LEVEL`, `YTDLP_PROXY`, `BOT_*` and `NOTES_*`
-    reach the droplet);
+    reach the droplet as `bot.env`). Two files go up separately: `miniapp.env`
+    (`ADMIN_TELEGRAM_ID`, `LOG_LEVEL` and the derived `MINIAPP_INIT_SECRET`) and `funnel.env`
+    (`TS_AUTHKEY`). A variable the Mini App needs goes into the first;
   - the README tables.
   Compose `environment:` overrides `bot.env`.
 - **A service or workspace package:**
@@ -131,8 +150,8 @@ up anything left `pending` from sqlite.
 
 ## Production facts
 
-- **Droplet:** 1 vCPU, 961 MB RAM plus 2 GB swap. Memory caps are bot 700 MB, dashboard 160 MB,
-  notes-web 160 MB and warp 64 MB; together they exceed RAM, so keep new services small.
+- **Droplet:** 1 vCPU, 961 MB RAM plus 2 GB swap. Memory caps are bot 700 MB, miniapp 160 MB,
+  funnel 96 MB and warp 64 MB; together they exceed RAM, so keep new services small.
 - **YouTube:** metadata and audio from the droplet IP need `warp`. oEmbed, the Instagram embed
   page and TikTok oEmbed work directly.
 - **Telegram:** at most one poller per token. Running `telegram-bot` locally while production

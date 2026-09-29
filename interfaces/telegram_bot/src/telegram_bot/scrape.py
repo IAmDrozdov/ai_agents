@@ -64,7 +64,7 @@ def _is_public_address(host: str) -> bool:
 def assert_fetchable(url: str) -> None:
     """Guard the one place a user gets to choose what this host connects to.
 
-    The bot shares a Docker network with the usage dashboard and can reach the
+    The bot shares a Docker network with the Mini App and can reach the
     cloud metadata service, so an unchecked URL turns the scraper into a reader
     of internal endpoints. Raises ScrapeError when the target is not public.
     """

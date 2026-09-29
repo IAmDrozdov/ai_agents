@@ -76,23 +76,47 @@ async def enrich_item(
         filing = await classifier.file(request)
     except ClassifierRefused as exc:
         log.warning("item %s: classifier refused: %s", item.id, exc)
-        updated = await asyncio.to_thread(_store, db, item, fetched, None, f"refused: {exc}", now)
+        updated = await _store_async(db, item, fetched, None, f"refused: {exc}", now)
     except ClassifierRejected as exc:
         log.error("item %s: classifier rejected the request: %s", item.id, exc)
-        await asyncio.to_thread(items.mark_failed, db, item.id, str(exc), now=now)
+        await _record_failure(items.mark_failed, db, item.id, str(exc), now)
         return
     except ClassifierUnavailable as exc:
         log.warning("item %s: classifier unavailable, will retry: %s", item.id, exc)
-        await asyncio.to_thread(items.schedule_retry, db, item.id, str(exc), now=now)
+        await _record_failure(items.schedule_retry, db, item.id, str(exc), now)
         return
     except Exception as exc:
         log.exception("item %s: enrichment failed, will retry", item.id)
-        await asyncio.to_thread(items.schedule_retry, db, item.id, str(exc), now=now)
+        await _record_failure(items.schedule_retry, db, item.id, str(exc), now)
         return
     else:
-        updated = await asyncio.to_thread(_store, db, item, fetched, filing, fetch_error, now)
-    if notify is not None:
+        updated = await _store_async(db, item, fetched, filing, fetch_error, now)
+    if updated is not None and notify is not None:
         await notify(updated)
+
+
+async def _record_failure(
+    record: Callable[..., Item], db: Database, item_id: int, error: str, now: datetime | None
+) -> None:
+    try:
+        await asyncio.to_thread(record, db, item_id, error, now=now)
+    except KeyError:  # the Owner deleted it meanwhile
+        log.info("item %s was deleted while it was being enriched", item_id)
+
+
+async def _store_async(
+    db: Database,
+    item: Item,
+    fetched: Fetched | None,
+    filing: Filing | None,
+    error: str | None,
+    now: datetime | None,
+) -> Item | None:
+    try:
+        return await asyncio.to_thread(_store, db, item, fetched, filing, error, now)
+    except KeyError:  # the Owner deleted it meanwhile
+        log.info("item %s was deleted while it was being enriched", item.id)
+        return None
 
 
 def _store(

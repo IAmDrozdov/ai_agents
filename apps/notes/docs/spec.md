@@ -11,8 +11,13 @@ Status: ready-for-agent
 > - **Classifier:** OpenAI, not Claude (ticket 05). `CLASSIFIER_*` settings are `NOTES_CLASSIFIER_*`.
 > - **Testing:** no automated tests (ai_agents ADR-001). "Testing Decisions" and every "(seam N)"
 >   tag below are historical; checks are manual or through `uv run notes-smoke`.
-> - **Deployment:** services `bot` (shared) and `notes-web` in the ai_agents compose stack, sqlite at
+> - **Deployment:** services `bot` (shared) and `miniapp` in the ai_agents compose stack, sqlite at
 >   `/data/notes.sqlite3` on its `appdata` volume. There is no `maxi-notes` compose project.
+> - **Web UI:** replaced by the admin Mini App (ai_agents ADR-016), served by the `miniapp` service.
+>   Story 27 (SSH tunnel, no login page) and the "Telegram Mini App or any public HTTPS ingress;
+>   authentication on the web UI" out-of-scope line no longer apply: the app is public over HTTPS and
+>   every API call needs Telegram-signed data from the admin. Wherever this spec says "the web", read
+>   "the Mini App".
 
 ## Problem Statement
 

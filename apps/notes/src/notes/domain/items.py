@@ -65,6 +65,22 @@ class Capture:
     outcome: CaptureOutcome
 
 
+@dataclass(frozen=True)
+class ItemFilter:
+    """Which Items a list or bulk action covers; an Item matches if it is in any listed Section."""
+
+    sections: tuple[str, ...] = ()
+    status: Status | None = None
+    placement: Placement = "active"
+    unreviewed: bool = False
+
+
+@dataclass(frozen=True)
+class Page:
+    items: list[Item]
+    total: int
+
+
 def stamp(now: datetime | None = None) -> str:
     """UTC timestamp in sqlite's own `datetime('now')` format so comparisons stay textual."""
     return (now or datetime.now(UTC)).astimezone(UTC).strftime(TIMESTAMP)
@@ -229,29 +245,34 @@ def store_enrichment(
     error: str | None = None,
     now: datetime | None = None,
 ) -> Item:
-    """Record what Enrichment found and the Filing it produced; the Item is done."""
+    """Record what Enrichment found and file the Item; the Owner's own Filing is kept once Reviewed.
+
+    Raises KeyError if the Item was deleted while it was being enriched.
+    """
     with db.session() as conn:
-        conn.execute(
+        cur = conn.execute(
             "UPDATE items SET title=?, source=?, author=?, caption=?, image_url=?, gist=?, "
             "enrichment_status='done', enrichment_error=?, next_enrich_at=NULL, updated_at=? "
             "WHERE id=?",
             (title, source, author, caption, image_url, gist, error, stamp(now), item_id),
         )
-        _replace_sections(conn, item_id, sections)
+        if cur.rowcount == 0:
+            raise KeyError(item_id)
+        reviewed = conn.execute("SELECT reviewed FROM items WHERE id=?", (item_id,)).fetchone()
+        if not reviewed["reviewed"]:
+            _replace_sections(conn, item_id, sections)
         return _fetch(conn, item_id)
 
 
 def schedule_retry(db: Database, item_id: int, error: str, *, now: datetime | None = None) -> Item:
     """Count a transient failure; back off, or give up after the last step of BACKOFF."""
     with db.session() as conn:
-        attempts = (
-            int(
-                conn.execute(
-                    "SELECT enrichment_attempts FROM items WHERE id=?", (item_id,)
-                ).fetchone()["enrichment_attempts"]
-            )
-            + 1
-        )
+        row = conn.execute(
+            "SELECT enrichment_attempts FROM items WHERE id=?", (item_id,)
+        ).fetchone()
+        if row is None:
+            raise KeyError(item_id)
+        attempts = int(row["enrichment_attempts"]) + 1
         if attempts > len(BACKOFF):
             conn.execute(
                 "UPDATE items SET enrichment_status='failed', enrichment_attempts=?, "
@@ -311,12 +332,105 @@ def get_item(db: Database, item_id: int) -> Item | None:
             return None
 
 
-def query(db: Database, *, placement: Placement = "active") -> list[Item]:
-    """Items in a Placement, done ones last, newest first within a group."""
+def _where(flt: ItemFilter) -> tuple[str, list[object]]:
+    clauses = ["placement=?"]
+    params: list[object] = [flt.placement]
+    if flt.status is not None:
+        clauses.append("status=?")
+        params.append(flt.status)
+    if flt.unreviewed:
+        clauses.append("reviewed=0")
+    if flt.sections:
+        marks = ",".join("?" * len(flt.sections))
+        clauses.append(
+            "id IN (SELECT x.item_id FROM item_sections x "
+            f"JOIN sections s ON s.id=x.section_id WHERE s.slug IN ({marks}))"
+        )
+        params.extend(flt.sections)
+    return " AND ".join(clauses), params
+
+
+def query(db: Database, flt: ItemFilter | None = None, *, offset: int = 0, limit: int = 50) -> Page:
+    """Items the filter covers, done ones last, newest first within a group."""
+    where, params = _where(flt or ItemFilter())
     with db.session(readonly=True) as conn:
+        total = int(conn.execute(f"SELECT COUNT(*) FROM items WHERE {where}", params).fetchone()[0])
         rows = conn.execute(
-            "SELECT * FROM items WHERE placement=? "
-            "ORDER BY CASE status WHEN 'done' THEN 1 ELSE 0 END, created_at DESC, id DESC",
-            (placement,),
+            f"SELECT * FROM items WHERE {where} "
+            "ORDER BY CASE status WHEN 'done' THEN 1 ELSE 0 END, created_at DESC, id DESC "
+            "LIMIT ? OFFSET ?",
+            [*params, limit, offset],
         ).fetchall()
-        return [_row_to_item(conn, row) for row in rows]
+        return Page(items=[_row_to_item(conn, row) for row in rows], total=total)
+
+
+def edit_item(
+    db: Database,
+    item_id: int,
+    *,
+    sections: Sequence[str] | None = None,
+    status: Status | None = None,
+    placement: Placement | None = None,
+    text: str | None = None,
+    reviewed: bool = True,
+    now: datetime | None = None,
+) -> Item | None:
+    """Apply one Owner edit in a transaction; any edit marks the Item Reviewed. None if missing."""
+    with db.session() as conn:
+        row = conn.execute("SELECT placement FROM items WHERE id=?", (item_id,)).fetchone()
+        if row is None:
+            return None
+        if sections is not None:
+            _replace_sections(conn, item_id, sections)
+        if status is not None:
+            conn.execute("UPDATE items SET status=? WHERE id=?", (status, item_id))
+        if text is not None:
+            conn.execute("UPDATE items SET text=? WHERE id=?", (text, item_id))
+        if placement is not None and placement != row["placement"]:
+            _set_placement(conn, item_id, placement, now)
+        conn.execute(
+            "UPDATE items SET reviewed=?, updated_at=? WHERE id=?",
+            (int(reviewed), stamp(now), item_id),
+        )
+        return _fetch(conn, item_id)
+
+
+def delete_trashed(db: Database, item_id: int) -> bool:
+    """Delete a trashed Item for good; False if it does not exist, ValueError if not trashed."""
+    with db.session() as conn:
+        # One statement, so a Capture restoring this Link cannot slip in between check and delete.
+        if conn.execute(
+            "DELETE FROM items WHERE id=? AND placement='trashed'", (item_id,)
+        ).rowcount:
+            return True
+        if conn.execute("SELECT 1 FROM items WHERE id=?", (item_id,)).fetchone() is None:
+            return False
+        raise ValueError("only a trashed Item can be deleted")
+
+
+def archive_done(db: Database, *, now: datetime | None = None) -> int:
+    """Archive every active Item that is done; returns how many moved."""
+    with db.session() as conn:
+        cur = conn.execute(
+            "UPDATE items SET placement='archived', trashed_at=NULL, updated_at=? "
+            "WHERE placement='active' AND status='done'",
+            (stamp(now),),
+        )
+        return cur.rowcount
+
+
+def mark_reviewed(db: Database, flt: ItemFilter, *, now: datetime | None = None) -> int:
+    """Mark every Item the filter covers (all pages) as Reviewed; returns how many changed."""
+    where, params = _where(flt)
+    with db.session() as conn:
+        cur = conn.execute(
+            f"UPDATE items SET reviewed=1, updated_at=? WHERE reviewed=0 AND {where}",
+            [stamp(now), *params],
+        )
+        return cur.rowcount
+
+
+def empty_trash(db: Database) -> int:
+    """Delete every trashed Item for good; returns how many."""
+    with db.session() as conn:
+        return conn.execute("DELETE FROM items WHERE placement='trashed'").rowcount

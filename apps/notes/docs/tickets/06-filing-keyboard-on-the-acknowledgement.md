@@ -4,7 +4,7 @@
 
 **Blocked by:** 05 — Filing and Gist by the Classifier
 
-**Status:** ready-for-agent
+**Status:** replaced by the Mini App (ai_agents ADR-016). The item view sets Sections, Status and Placement, and the Acknowledgement carries one `✏️ Открыть` button that opens it, instead of a toggle keyboard. The criteria below are history.
 
 - [ ] Tapping the Посмотреть toggle on an Item that is only in Other results in a Filing of exactly Посмотреть (Other removed), and the re-rendered keyboard shows ✅ on Посмотреть (seams 6 and 1)
 - [ ] Tapping the only remaining Section off leaves the Item in Other and answers the callback with a toast mentioning Остальное (seams 6 and 1)

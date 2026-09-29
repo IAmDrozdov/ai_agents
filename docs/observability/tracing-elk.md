@@ -1,6 +1,6 @@
 # Tracing with ELK (local dev)
 
-The Telegram bot and the usage dashboard can export OpenTelemetry traces
+The Telegram bot and the Mini App server can export OpenTelemetry traces
 (`shared/obs/tracing.py`) to a local Elastic APM Server. Tracing is **off by default**
 (`OTEL_ENABLED=false`) and everything works without it.
 
@@ -11,7 +11,7 @@ traces. The stack below is scaffolding for the instrumentation that adds them.
 
 Flow:
 
-`telegram-bot / usage-dashboard (shared.obs.tracing) -> APM Server -> Elasticsearch -> Kibana`
+`telegram-bot / telegram-miniapp (shared.obs.tracing) -> APM Server -> Elasticsearch -> Kibana`
 
 ## 1) Start the observability stack
 
@@ -44,7 +44,7 @@ OTEL_TRACES_SAMPLER=always_on
 ## 3) Run a service
 
 ```bash
-uv run usage-dashboard --port 8081   # or: uv run telegram-bot
+uv run telegram-miniapp --port 8083   # or: uv run telegram-bot
 ```
 
 ## 4) View in Kibana

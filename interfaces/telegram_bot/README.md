@@ -1,8 +1,9 @@
 # interfaces/telegram_bot
 
 Private Telegram bot exposing every workflow in `registry.py` (`doc_translator`,
-`pdf_tts`, `yt_dub`) through the job contract (ADR-005 thin adapter, ADR-012), plus a
-localhost-only usage dashboard. Both share one sqlite database (`TELEGRAM_DB_PATH`).
+`pdf_tts`, `yt_dub`) through the job contract (ADR-005 thin adapter, ADR-012), plus the admin
+Mini App for notes and usage (`miniapp/`, ADR-016). Both use the bot's sqlite database
+(`TELEGRAM_DB_PATH`); the Mini App also writes the notes database.
 
 Responsibilities:
 - parse Telegram updates, download documents (≤20 MB Bot API cap)
@@ -19,7 +20,7 @@ Responsibilities:
 - access control: single admin (`ADMIN_TELEGRAM_ID`) mints one-time invite links
   (`/invite` → `t.me/<bot>?start=<token>`); redeemed users are whitelisted in sqlite
   until the admin runs `/revoke <id>`; private chats only
-- record every job (chars, cost USD + cost lines, facts, duration, status) for the dashboard
+- record every job (chars, cost USD + cost lines, facts, duration, status) for the Mini App's usage tab
 
 Non-responsibilities: no prompt/template logic, no direct LLM SDK usage.
 
@@ -40,7 +41,7 @@ the message says the error was a passing blip and the job is worth retrying now.
 | `input` | 🟠 This document | 400/422, or a workflow-reported error |
 
 The usage log stores the scope too (`[provider] OpenAI server error: HTTP 500…`), so
-the dashboard can tell an outage apart from a real regression after the fact.
+the usage tab can tell an outage apart from a real regression after the fact.
 
 ## Audio delivery
 
@@ -71,12 +72,12 @@ builder in `user_config.py`). Nothing else in the bot changes.
 ## Run
 
 ```bash
-uv run telegram-bot                                  # long polling, no ingress
-uv run usage-dashboard --host 127.0.0.1 --port 8081  # dashboard (SSH tunnel in prod)
+uv run telegram-bot                                   # long polling, no ingress
+uv run telegram-miniapp --host 127.0.0.1 --port 8083  # Mini App server (Funnel publishes it in prod)
 ```
 
 Env (via `shared.config.Settings` / `.env`): `TELEGRAM_BOT_TOKEN`,
-`ADMIN_TELEGRAM_ID`, `TELEGRAM_DB_PATH`, `OPENAI_API_KEY`, plus the operator policy
+`ADMIN_TELEGRAM_ID`, `TELEGRAM_DB_PATH`, `OPENAI_API_KEY`, `BOT_MINIAPP_URL`, plus the operator policy
 `BOT_LANGUAGES`, `BOT_DEFAULT_SOURCE_LANGUAGE`, `BOT_DEFAULT_TARGET_LANGUAGE`,
 `BOT_MAX_JOB_COST_USD`, `BOT_DAILY_USER_COST_LIMIT_USD` (defaults in `shared/config.py`;
 a user's own `/settings` choices override the language defaults).
@@ -99,10 +100,35 @@ The admin's text and links get the usual card with 💾 В заметки on top
 Items (`apps/notes`, ADR-015). The routing table, card lifecycle and notes path are in
 `docs/runtime.md`.
 
-## Dashboard
+## Mini App (admin only, ADR-016)
 
-- `GET /` — totals, by-user and by-user×agent aggregates, call history
-- `GET /api/usage` — same as JSON
+The admin's chat has a `📒` menu button while `BOT_MINIAPP_URL` is set, and each saved
+item's message a `✏️ Открыть` button that opens that item. Both open the `miniapp` service
+(`miniapp/`): a static shell plus a JSON API.
+
+- `GET /` and `/static/*` — the shell; public, no data
 - `GET /healthz`
+- `GET /api/usage` — totals, per-user spend and job history
+- `GET /api/notes/sections`, `GET /api/notes/items` (filters: section, status, placement,
+  unreviewed; paged), `GET /api/notes/items/{id}`
+- `PATCH /api/notes/items/{id}` (Sections, Status, Placement, text, Reviewed),
+  `DELETE /api/notes/items/{id}` (trashed only), `POST /api/notes/items/{id}/reenrich`
+- `POST /api/notes/bulk/archive-done`, `/bulk/mark-reviewed`, `/bulk/empty-trash`
+- `POST /api/notes/sections`, `PATCH /api/notes/sections/{id}`, `PUT /api/notes/sections/order`,
+  `DELETE /api/notes/sections/{id}` (Other is refused with 400)
 
-No auth by design: bind 127.0.0.1 and access via `ssh -N -L 8081:127.0.0.1:8081 root@<droplet>`.
+Every `/api` call needs `Authorization: tma <initData>` (Telegram-signed, at most 24 h old, admin
+id only: 401 or 403 otherwise). The routes only parse and serialise; notes rules live in
+`apps/notes`. Setup and checks: `infrastructure/README.md`, `docs/verifying.md`.
+
+Phone UI rules (found on an iPhone, 2026-09-29; the shell in `miniapp/static`):
+
+- Form controls are at least 16 px, and the viewport has `maximum-scale=1`. Below that iOS zooms
+  the page on focus and never zooms back, so every screen is clipped at the right edge.
+- Nothing is `sticky` or `fixed` at the top: Telegram's native header covers the top edge of the
+  webview, so a sticky tab bar slid half under it. `disableVerticalSwipes` keeps a scroll at the
+  top from dragging the whole sheet.
+- A tap rebuilds only what it changed. Controls are built once and only flip a class or text;
+  lists are reconciled by id (`core.reconcile`), so kept cards keep their images; a new view is
+  swapped in after its data arrives, never a blank; a reset keeps the old list until the new
+  one is here; no whole-view dimming; an edit shows at once and the server's answer confirms it.

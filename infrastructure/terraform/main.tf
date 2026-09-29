@@ -18,8 +18,8 @@ resource "digitalocean_droplet" "app" {
   }
 }
 
-# Inbound: SSH only. The dashboard is published on the droplet's loopback and
-# reached via SSH tunnel, so it needs no inbound rule.
+# Inbound: SSH only. The Mini App is published by the funnel sidecar (Tailscale Funnel,
+# an outbound tunnel), so it needs no inbound rule.
 resource "digitalocean_firewall" "app" {
   name        = "${var.droplet_name}-fw"
   droplet_ids = [digitalocean_droplet.app.id]

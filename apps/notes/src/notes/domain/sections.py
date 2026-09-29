@@ -2,12 +2,32 @@
 
 from __future__ import annotations
 
+import re
 import sqlite3
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from notes.db import Database
 
 OTHER_SLUG = "other"
+NAME_MAX = 40
+EMOJI_MAX = 8
+HINT_MAX = 200
+COLOR_RE = re.compile(r"#[0-9a-fA-F]{6}")
+_TRANSLIT = str.maketrans(
+    {
+        "а": "a", "б": "b", "в": "v", "г": "g", "д": "d", "е": "e", "ё": "e", "ж": "zh",
+        "з": "z", "и": "i", "й": "y", "к": "k", "л": "l", "м": "m", "н": "n", "о": "o",
+        "п": "p", "р": "r", "с": "s", "т": "t", "у": "u", "ф": "f", "х": "kh", "ц": "ts",
+        "ч": "ch", "ш": "sh", "щ": "shch", "ъ": "", "ы": "y", "ь": "", "э": "e", "ю": "yu",
+        "я": "ya",
+    }
+)  # fmt: skip
+
+
+class SectionError(ValueError):
+    """A Section change the Owner cannot make; the message is Russian and shown as it is."""
+
 
 # slug, name, emoji, color, hint — position is the list order.
 STARTER_SECTIONS: tuple[tuple[str, str, str, str, str], ...] = (
@@ -48,14 +68,25 @@ def _row_to_section(row: sqlite3.Row) -> Section:
 
 
 def seed_sections(db: Database) -> None:
-    """Insert the starter set once; existing slugs are left untouched."""
+    """Fill an empty store with the starter set; a starter the Owner deleted stays deleted.
+
+    Other is the one exception: it is put back (last) whenever it is missing, since Items need it.
+    """
     with db.session() as conn:
+        empty = conn.execute("SELECT COUNT(*) FROM sections").fetchone()[0] == 0
         for position, (slug, name, emoji, color, hint) in enumerate(STARTER_SECTIONS):
-            conn.execute(
-                "INSERT OR IGNORE INTO sections(slug, name, emoji, color, hint, is_builtin, position) "
-                "VALUES (?, ?, ?, ?, ?, 1, ?)",
-                (slug, name, emoji, color, hint, position),
-            )
+            if empty:
+                conn.execute(
+                    "INSERT INTO sections(slug, name, emoji, color, hint, is_builtin, position) "
+                    "VALUES (?, ?, ?, ?, ?, 1, ?)",
+                    (slug, name, emoji, color, hint, position),
+                )
+            elif slug == OTHER_SLUG:
+                conn.execute(
+                    "INSERT OR IGNORE INTO sections(slug, name, emoji, color, hint, is_builtin, position) "
+                    "SELECT ?, ?, ?, ?, ?, 1, COALESCE(MAX(position), -1) + 1 FROM sections",
+                    (slug, name, emoji, color, hint),
+                )
 
 
 def list_sections(db: Database) -> list[Section]:
@@ -76,8 +107,138 @@ def get_section_by_slug(db: Database, slug: str) -> Section | None:
     return _row_to_section(row) if row else None
 
 
+def active_counts(db: Database) -> dict[int, int]:
+    """Section id -> number of active Items filed under it."""
+    with db.session(readonly=True) as conn:
+        rows = conn.execute(
+            "SELECT x.section_id AS section_id, COUNT(*) AS n FROM item_sections x "
+            "JOIN items i ON i.id = x.item_id WHERE i.placement='active' GROUP BY x.section_id"
+        ).fetchall()
+    return {int(row["section_id"]): int(row["n"]) for row in rows}
+
+
 def other_id(db: Database) -> int:
     other = get_section_by_slug(db, OTHER_SLUG)
     if other is None:
         raise RuntimeError("the Other section is missing — was the database initialised?")
     return other.id
+
+
+def slugify(name: str) -> str:
+    """A stable ASCII slug from a name, Cyrillic transliterated: «Подарки» becomes `podarki`."""
+    latin = name.strip().lower().translate(_TRANSLIT)
+    return re.sub(r"[^a-z0-9]+", "-", latin).strip("-")[:NAME_MAX].strip("-")
+
+
+def _validated(name: str, emoji: str, color: str, hint: str) -> tuple[str, str, str, str]:
+    name, emoji, hint = name.strip(), emoji.strip(), hint.strip()
+    if not name:
+        raise SectionError("Назови секцию")
+    if len(name) > NAME_MAX:
+        raise SectionError(f"Название длиннее {NAME_MAX} символов")
+    if len(emoji) > EMOJI_MAX:
+        raise SectionError("Слишком длинный эмодзи")
+    if not COLOR_RE.fullmatch(color):
+        raise SectionError("Цвет должен быть вида #a1b2c3")
+    if len(hint) > HINT_MAX:
+        raise SectionError(f"Подсказка длиннее {HINT_MAX} символов")
+    return name, emoji, color, hint
+
+
+def _name_taken(conn: sqlite3.Connection, name: str, *, except_id: int | None = None) -> bool:
+    rows = conn.execute("SELECT id, name FROM sections").fetchall()
+    return any(
+        int(row["id"]) != except_id and row["name"].casefold() == name.casefold() for row in rows
+    )
+
+
+def create_section(
+    db: Database, *, name: str, emoji: str = "", color: str = "#8a8a8a", hint: str = ""
+) -> Section:
+    """Add a Section just before Other; the slug comes from the name and never changes."""
+    name, emoji, color, hint = _validated(name, emoji, color, hint)
+    slug = slugify(name)
+    if not slug:
+        raise SectionError("В названии нужна хотя бы одна буква или цифра")
+    with db.session() as conn:
+        if _name_taken(conn, name):
+            raise SectionError(f"Секция «{name}» уже есть")
+        twin = conn.execute("SELECT name FROM sections WHERE slug=?", (slug,)).fetchone()
+        if twin:
+            raise SectionError(f"Название слишком похоже на секцию «{twin['name']}»")
+        other = conn.execute("SELECT position FROM sections WHERE slug=?", (OTHER_SLUG,)).fetchone()
+        position = int(other["position"]) if other else 0
+        conn.execute("UPDATE sections SET position = position + 1 WHERE position >= ?", (position,))
+        try:
+            cur = conn.execute(
+                "INSERT INTO sections(slug, name, emoji, color, hint, is_builtin, position) "
+                "VALUES (?, ?, ?, ?, ?, 0, ?)",
+                (slug, name, emoji, color, hint, position),
+            )
+        except sqlite3.IntegrityError as exc:  # a double tap created it a moment ago
+            raise SectionError(f"Секция «{name}» уже есть") from exc
+        row = conn.execute("SELECT * FROM sections WHERE id=?", (cur.lastrowid,)).fetchone()
+        return _row_to_section(row)
+
+
+def update_section(
+    db: Database,
+    section_id: int,
+    *,
+    name: str | None = None,
+    emoji: str | None = None,
+    color: str | None = None,
+    hint: str | None = None,
+) -> Section | None:
+    """Change what the Owner sees of a Section; None if it is missing. The slug is never touched."""
+    with db.session() as conn:
+        row = conn.execute("SELECT * FROM sections WHERE id=?", (section_id,)).fetchone()
+        if row is None:
+            return None
+        name, emoji, color, hint = _validated(
+            row["name"] if name is None else name,
+            row["emoji"] if emoji is None else emoji,
+            row["color"] if color is None else color,
+            row["hint"] if hint is None else hint,
+        )
+        if _name_taken(conn, name, except_id=section_id):
+            raise SectionError(f"Секция «{name}» уже есть")
+        conn.execute(
+            "UPDATE sections SET name=?, emoji=?, color=?, hint=? WHERE id=?",
+            (name, emoji, color, hint, section_id),
+        )
+        return _row_to_section(
+            conn.execute("SELECT * FROM sections WHERE id=?", (section_id,)).fetchone()
+        )
+
+
+def reorder_sections(db: Database, section_ids: Sequence[int]) -> list[Section]:
+    """Set the list order: `section_ids` must name every Section exactly once."""
+    with db.session() as conn:
+        current = sorted(int(row["id"]) for row in conn.execute("SELECT id FROM sections"))
+        if sorted(section_ids) != current:
+            raise SectionError("Список секций изменился — обнови экран")
+        conn.executemany(
+            "UPDATE sections SET position=? WHERE id=?",
+            [(position, section_id) for position, section_id in enumerate(section_ids)],
+        )
+    return list_sections(db)
+
+
+def delete_section(db: Database, section_id: int) -> bool:
+    """Delete a Section; Items left with none go to Other. False if missing; Other is refused."""
+    with db.session() as conn:
+        row = conn.execute("SELECT slug FROM sections WHERE id=?", (section_id,)).fetchone()
+        if row is None:
+            return False
+        if row["slug"] == OTHER_SLUG:
+            raise SectionError("«Остальное» удалить нельзя")
+        other = conn.execute("SELECT id FROM sections WHERE slug=?", (OTHER_SLUG,)).fetchone()
+        conn.execute(
+            "INSERT INTO item_sections(item_id, section_id) "
+            "SELECT item_id, ? FROM item_sections GROUP BY item_id "
+            "HAVING COUNT(*) = 1 AND MIN(section_id) = ?",
+            (int(other["id"]), section_id),
+        )
+        conn.execute("DELETE FROM sections WHERE id=?", (section_id,))
+        return True

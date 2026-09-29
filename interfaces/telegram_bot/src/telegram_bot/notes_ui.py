@@ -7,10 +7,11 @@ from html import escape
 from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
 from aiogram.filters.callback_data import CallbackData
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 
 from notes.domain.items import Capture, Item
 from notes.domain.sections import Section
+from shared.config import settings
 from shared.obs import get_logger
 
 log = get_logger(__name__)
@@ -18,7 +19,7 @@ log = get_logger(__name__)
 HELP = (
     "\n\n📌 <b>Notes</b> (admin only): any text or link you send gets a card — "
     "💾 save to notes, one of the agents above, or cancel. Saved items are filed into "
-    "sections; browse and sort them on the notes web UI (SSH tunnel, port 8082)."
+    "sections; browse and sort them in the app (the 📒 button next to the message field)."
 )
 STATUS_LABELS = {"new": "новое", "started": "начато", "done": "готово"}
 DUPLICATE_PREFIX = {
@@ -29,6 +30,7 @@ DUPLICATE_PREFIX = {
 TITLE_LIMIT = 300
 OFFER_LABEL = "🤖 Агенты"
 RETURN_LABEL = "↩️ Вернуть"
+OPEN_LABEL = "✏️ Открыть"
 
 
 class NotesCB(CallbackData, prefix="n"):
@@ -72,19 +74,25 @@ def duplicate(capture: Capture) -> str:
 
 def item_keyboard(item: Item) -> InlineKeyboardMarkup | None:
     row: list[InlineKeyboardButton] = []
+    # Telegram rejects a web_app button that is not https, and a rejected keyboard would fail the save.
+    # A query string, never a #fragment: Telegram puts its launch data in the fragment (ADR-016).
+    base = settings.bot_miniapp_url.strip().rstrip("/")
+    if base.startswith("https://"):
+        url = f"{base}/?item={item.id}"
+        row.append(InlineKeyboardButton(text=OPEN_LABEL, web_app=WebAppInfo(url=url)))
     if item.kind == "link" and item.url:
         row.append(
             InlineKeyboardButton(
                 text=OFFER_LABEL, callback_data=NotesCB(action="offer", item_id=item.id).pack()
             )
         )
+    rows = [row] if row else []
     if item.placement == "archived":
-        row.append(
-            InlineKeyboardButton(
-                text=RETURN_LABEL, callback_data=NotesCB(action="restore", item_id=item.id).pack()
-            )
+        restore = InlineKeyboardButton(
+            text=RETURN_LABEL, callback_data=NotesCB(action="restore", item_id=item.id).pack()
         )
-    return InlineKeyboardMarkup(inline_keyboard=[row]) if row else None
+        rows.append([restore])
+    return InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
 
 
 async def edit_acknowledgement(bot: Bot, item: Item) -> None:

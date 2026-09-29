@@ -1,14 +1,14 @@
 # Notes — glossary
 
 A single owner's "save for later" store: things captured from a phone through the ai_agents
-Telegram bot, filed into sections automatically, sorted and tidied on a private web UI.
+Telegram bot, filed into sections automatically, sorted and tidied in the admin Mini App.
 Kept apart from the repo-level `CONTEXT.md` because some words mean something else there
 (**Source** most of all). Here, the **Owner** is the ai_agents admin.
 
 ## Language
 
 **Owner**:
-The one person the bot answers and the web UI serves.
+The one person the bot answers and the Mini App serves.
 _Avoid_: user, admin, account
 
 **Item**:
@@ -84,7 +84,7 @@ Whether the Owner has looked at an Item's Filing since Capture.
 _Avoid_: confirmed, checked, triaged
 
 **Sorting pass**:
-The Owner's periodic session on the web UI working through unreviewed Items.
+The Owner's periodic session in the Mini App working through unreviewed Items.
 _Avoid_: triage, inbox zero, review queue
 
 **Browse**:
