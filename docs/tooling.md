@@ -11,7 +11,7 @@
 
 - `uv run ruff check .`
 - `uv run ruff format .`
-- `uv run ty check`
+- `uv run ty check` (the pre-commit hook checks staged files only; run the full check yourself)
 
 `.pre-commit-config.yaml` pins the same ruff version that `uv.lock` resolves for the `dev`
 group; bump both together. Workspace members are declared `known-first-party` in
@@ -49,11 +49,7 @@ Record reason in commit message.
 
 `tools/check_layers.py` = boundary source of truth.
 
-Enforces:
-- `interfaces/*` no imports: `langchain`, `langchain_core`, `langchain_community`, `langgraph`, `openai`, `anthropic`
-- `shared/*` no imports: `workflows`, `interfaces`
-- `workflows/<a>/*` no imports: `workflows/<b>/*`
-- `workflows/*` no imports: `interfaces`
+The rules it enforces are listed in `docs/architecture.md` ("Enforced dependency rules").
 
 Run:
 

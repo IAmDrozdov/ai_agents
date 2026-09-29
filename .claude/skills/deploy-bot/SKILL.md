@@ -6,12 +6,14 @@ description: Deploy the current code to the Telegram bot droplet and verify it i
 # Deploy the Telegram bot to the DigitalOcean droplet
 
 Push-based deploy: rsync the repo to the droplet, build the Docker image there,
-restart both containers (`bot`, `dashboard`), then verify. Full infra docs:
-`infrastructure/README.md` (ADR-008).
+restart the containers (`bot`, `dashboard`, `notes-web`; `warp` when enabled), then verify.
+Full infra docs: `infrastructure/README.md` (ADR-008); what each service does:
+`docs/runtime.md`.
 
 ## Preconditions
 
-- `.env` at repo root has `OPENAI_API_KEY`, `TELEGRAM_BOT_TOKEN`, `ADMIN_TELEGRAM_ID`.
+- `.env` at repo root has `OPENAI_API_KEY`, `TELEGRAM_BOT_TOKEN`, `ADMIN_TELEGRAM_ID`. Only the
+  allow-listed keys reach the droplet (`deploy.sh`); a new env var needs the regex there too.
 - `infrastructure/terraform/terraform.tfvars` names your DO SSH key (`ssh_key_name`);
   optionally `export SSH_KEY=~/.ssh/<key>` for the matching private key (unset means
   ssh-agent / `~/.ssh/config`).
@@ -32,7 +34,9 @@ restart both containers (`bot`, `dashboard`), then verify. Full infra docs:
    ```bash
    ./infrastructure/deploy.sh
    ```
-   Takes ~1–3 min (rsync + on-droplet `docker compose build` + `up -d`).
+   Takes ~2–4 min (rsync + on-droplet `docker compose build` + `up -d`). It waits for the bot
+   and dashboard first, then notes-web separately. A failed build stops before `up -d`, so the
+   old containers keep running.
    If the on-droplet build OOMs or fails, use the buildx fallback in
    `infrastructure/README.md`.
 
@@ -41,26 +45,30 @@ restart both containers (`bot`, `dashboard`), then verify. Full infra docs:
    IP=$(terraform -chdir=infrastructure/terraform output -raw droplet_ipv4)
    ssh ${SSH_KEY:+-i "$SSH_KEY"} root@$IP 'docker ps --format "{{.Names}}: {{.Status}}"'
    ssh ${SSH_KEY:+-i "$SSH_KEY"} root@$IP 'docker logs docker-bot-1 2>&1 | tail -5'
-   ssh ${SSH_KEY:+-i "$SSH_KEY"} root@$IP 'curl -s http://127.0.0.1:8081/healthz'
+   ssh ${SSH_KEY:+-i "$SSH_KEY"} root@$IP 'curl -s http://127.0.0.1:8081/healthz; curl -s http://127.0.0.1:8082/healthz'
    ```
-   Expected: both containers `Up`; bot log ends with
-   `polling as @<your-bot-username>` and `worker loop started` (no tracebacks);
-   healthz returns `{"status":"ok"}`.
+   Expected: all containers `Up`; bot log ends with
+   `polling as @<your-bot-username>` and `worker loop started`, with no tracebacks and no
+   `notes disabled`; both healthz return `{"status":"ok"}`. For regression checks that cost
+   nothing (agent previews in the new image, `notes-smoke`), see `docs/verifying.md` §4.
 
 4. **Report** — state what was deployed (branch/diff summary), the verification
    results, and the dashboard tunnel command:
-   `ssh ${SSH_KEY:+-i "$SSH_KEY"} -N -L 8081:127.0.0.1:8081 root@$IP`
+   `ssh ${SSH_KEY:+-i "$SSH_KEY"} -N -L 8081:127.0.0.1:8081 -L 8082:127.0.0.1:8082 root@$IP`
 
 ## Rollback
 
-The droplet has no git history — rollback is redeploying older code from your machine:
+The droplet has no git history — rollback is redeploying older code from your machine.
+Before a risky deploy, tag the running image (`docker tag ai_agents:latest ai_agents:rollback-<n>`
+on the droplet): `docker image prune -f` keeps tagged images.
 ```bash
 git stash            # or check out the last good commit
 ./infrastructure/deploy.sh
 git stash pop
 ```
-The sqlite volume (`/data/telegram_bot.sqlite3`) is untouched by deploys; users,
-settings, and usage history survive. Back it up before schema-affecting changes:
+The sqlite volume (`/data/telegram_bot.sqlite3`, `/data/notes.sqlite3`) is untouched by
+deploys; users, settings, usage history and notes survive. `notes.sqlite3` is WAL with two
+writers, so back it up with the snapshot command in `infrastructure/README.md`. Back it up before schema-affecting changes:
 ```bash
 ssh ${SSH_KEY:+-i "$SSH_KEY"} root@$IP \
   'cat $(docker volume inspect -f "{{.Mountpoint}}" docker_appdata)/telegram_bot.sqlite3' > backup.sqlite3
