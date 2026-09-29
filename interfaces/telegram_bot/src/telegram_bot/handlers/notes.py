@@ -1,4 +1,4 @@
-"""Notes Capture for the admin: every text or link is saved first, then enriched (ADR-015)."""
+"""Notes for the admin: 💾 on the card saves, then enriches in the background (ADR-015)."""
 
 from __future__ import annotations
 
@@ -22,11 +22,15 @@ from notes.enrich.http import AiohttpClient, HttpClient
 from notes.enrich.pipeline import enrich_item
 from notes.sweeper import run_sweeper
 from shared.config import settings
+from shared.obs import get_logger
 
 from .. import notes_ui
 from ..access import is_admin
+from ..keyboards import JobCB
 from ..notes_ui import NotesCB
-from .documents import offer_link
+from .documents import Draft, offer_link, restore_draft, take_draft
+
+log = get_logger(__name__)
 
 router = Router(name="notes")
 
@@ -73,53 +77,41 @@ def build_runtime() -> NotesRuntime:
     return NotesRuntime(db=db, http=AiohttpClient(), classifier=make_classifier(settings))
 
 
-def _body(message: Message) -> str:
-    return (message.text or message.caption or "").strip()
-
-
-def _hidden_links(message: Message) -> list[str]:
-    entities = message.entities or message.caption_entities or []
-    return [entity.url for entity in entities if entity.type == "text_link" and entity.url]
-
-
-def is_capture(message: Message) -> bool:
-    """Admin text (or a captioned non-document) that is not a command; files stay with documents."""
-    user = message.from_user
-    if user is None or not is_admin(user.id) or message.document is not None:
-        return False
-    body = _body(message)
-    return bool(body) and not body.startswith("/")
-
-
-async def _acknowledge(message: Message, item: Item, bot: Bot, notes: NotesRuntime) -> None:
-    sent = await message.answer(
-        notes_ui.acknowledgement(item), reply_markup=notes_ui.item_keyboard(item)
-    )
-    await asyncio.to_thread(
-        items.set_ack_message, notes.db, item.id, chat_id=sent.chat.id, message_id=sent.message_id
-    )
-    notes.enrich_later(bot, item.id)
-
-
-@router.message(is_capture)
-async def capture_handler(message: Message, bot: Bot, notes: NotesRuntime) -> None:
-    extracted = extract_urls(_body(message), linked=_hidden_links(message))
+async def _save(card: Message, draft: Draft, bot: Bot, notes: NotesRuntime) -> None:
+    """Turn the card into the first Item's Acknowledgement; further links get their own."""
+    extracted = extract_urls(draft.text, linked=draft.links)
+    captured: list[tuple[Item, str | None]] = []
     if not extracted.urls:
         note = await asyncio.to_thread(
-            items.capture_note, notes.db, extracted.annotation, chat_id=message.chat.id
+            items.capture_note, notes.db, extracted.annotation, chat_id=card.chat.id
         )
-        await _acknowledge(message, note, bot, notes)
-        return
+        captured.append((note, None))
     for url in extracted.urls:
         capture = await asyncio.to_thread(
-            items.capture_link, notes.db, url, extracted.annotation, chat_id=message.chat.id
+            items.capture_link, notes.db, url, extracted.annotation, chat_id=card.chat.id
         )
-        if capture.outcome == "new":
-            await _acknowledge(message, capture.item, bot, notes)
+        is_new = capture.outcome == "new"
+        captured.append((capture.item, None if is_new else notes_ui.duplicate(capture)))
+    for index, (item, duplicate) in enumerate(captured):
+        text = duplicate or notes_ui.acknowledgement(item)
+        keyboard = notes_ui.item_keyboard(item)
+        if index == 0:
+            try:
+                await card.edit_text(text, reply_markup=keyboard)
+                sent = card
+            except TelegramBadRequest:  # the card is gone: acknowledge in a new message
+                sent = await card.answer(text, reply_markup=keyboard)
         else:
-            await message.answer(
-                notes_ui.duplicate(capture), reply_markup=notes_ui.item_keyboard(capture.item)
+            sent = await card.answer(text, reply_markup=keyboard)
+        if duplicate is None:
+            await asyncio.to_thread(
+                items.set_ack_message,
+                notes.db,
+                item.id,
+                chat_id=sent.chat.id,
+                message_id=sent.message_id,
             )
+            notes.enrich_later(bot, item.id)
 
 
 def _admin_message(callback: CallbackQuery) -> Message | None:
@@ -128,11 +120,34 @@ def _admin_message(callback: CallbackQuery) -> Message | None:
     return callback.message if isinstance(callback.message, Message) else None
 
 
+@router.callback_query(JobCB.filter(F.action == "save"))
+async def save_handler(callback: CallbackQuery, bot: Bot, notes: NotesRuntime | None) -> None:
+    card = _admin_message(callback)
+    if card is None or notes is None:
+        await callback.answer("Notes are unavailable right now.", show_alert=True)
+        return
+    draft = take_draft(card.chat.id, card.message_id)
+    if draft is None:
+        await callback.answer("This card has expired — send it again.", show_alert=True)
+        return
+    try:
+        await _save(card, draft, bot, notes)
+    except Exception:
+        log.exception("notes: saving card %s failed", card.message_id)
+        restore_draft(card.chat.id, card.message_id, draft)
+        await callback.answer("Could not save — try again.", show_alert=True)
+        return
+    await callback.answer()
+
+
 @router.callback_query(NotesCB.filter(F.action == "offer"))
 async def offer_handler(
-    callback: CallbackQuery, callback_data: NotesCB, notes: NotesRuntime
+    callback: CallbackQuery, callback_data: NotesCB, notes: NotesRuntime | None
 ) -> None:
     message = _admin_message(callback)
+    if notes is None:
+        await callback.answer("Notes are unavailable right now.", show_alert=True)
+        return
     item = await asyncio.to_thread(items.get_item, notes.db, callback_data.item_id)
     await callback.answer()
     if message is None or item is None or item.url is None:
@@ -142,11 +157,12 @@ async def offer_handler(
 
 @router.callback_query(NotesCB.filter(F.action == "restore"))
 async def restore_handler(
-    callback: CallbackQuery, callback_data: NotesCB, notes: NotesRuntime
+    callback: CallbackQuery, callback_data: NotesCB, notes: NotesRuntime | None
 ) -> None:
     message = _admin_message(callback)
     if (
         message is None
+        or notes is None
         or await asyncio.to_thread(items.get_item, notes.db, callback_data.item_id) is None
     ):
         await callback.answer()

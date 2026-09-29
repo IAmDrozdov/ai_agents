@@ -80,8 +80,9 @@ apps/notes/
 ```
 
 Its interfaces follow the same thin-adapter rule: `telegram_bot/handlers/notes.py` and
-`notes_ui.py` parse and render, `interfaces/notes_web` serves the web UI. The admin's
-messages reach the notes router before `documents` (save first); invitees never do.
+`notes_ui.py` parse and render, `interfaces/notes_web` serves the web UI. The admin's text
+and links get the usual price card with a 💾 button on top (`documents.admin_input_handler`);
+invitees never see 💾.
 
 ## Thin-adapter rule
 

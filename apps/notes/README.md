@@ -12,7 +12,8 @@ on a private web UI. Merged in from the standalone `maxi-notes` repo (ADR-015).
 | Where | What |
 |---|---|
 | `apps/notes/src/notes/` | domain (`domain/`), sqlite store (`db.py`), Enrichment (`enrich/`), Classifier port (`classify/`), `sweeper.py`, `smoke.py` |
-| `interfaces/telegram_bot/…/handlers/notes.py` | admin-only Capture, the 🤖 and ↩️ buttons, background enrichment and the sweeper |
+| `interfaces/telegram_bot/…/handlers/documents.py` | the admin's ask-first card (`admin_input_handler`, 💾 on the price card) |
+| `interfaces/telegram_bot/…/handlers/notes.py` | 💾 saving, the 🤖 and ↩️ buttons, background enrichment and the sweeper |
 | `interfaces/telegram_bot/…/notes_ui.py` | Acknowledgement text and keyboard (Russian) |
 | `interfaces/notes_web/` | the web UI (`notes-web`) |
 
@@ -21,7 +22,7 @@ on a private web UI. Merged in from the standalone `maxi-notes` repo (ADR-015).
 ```bash
 uv run notes-smoke https://youtu.be/dQw4w9WgXcQ   # fetch + file one input, print the result
 uv run notes-smoke http://169.254.169.254/         # the SSRF guard refuses it
-uv run telegram-bot                                # Capture works for ADMIN_TELEGRAM_ID
+uv run telegram-bot                                # 💾 on the card for ADMIN_TELEGRAM_ID
 uv run notes-web                                   # http://127.0.0.1:8082
 ```
 

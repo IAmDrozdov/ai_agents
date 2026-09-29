@@ -4,9 +4,10 @@ Status: ready-for-agent
 
 > **Merged into ai_agents (2026-09-29, ADR-015).** This spec was written for the standalone
 > `maxi-notes` repo. Where it disagrees with the merge, the merge wins:
-> - **Bot:** no own bot. Capture runs inside the ai_agents Telegram bot for the admin
->   (`ADMIN_TELEGRAM_ID` is the Owner); invitees never see notes. A link's Acknowledgement carries
->   a 🤖 button that opens the ai_agents price card for it.
+> - **Bot:** no own bot. The Owner is the ai_agents admin (`ADMIN_TELEGRAM_ID`). Capture is
+>   **ask first**: anything sent gets a card with 💾 В заметки, the priced agents, and Cancel. 💾
+>   turns the card into the Acknowledgement. There is no automatic Capture of every message.
+>   Invitees never see notes. A saved link's Acknowledgement carries a 🤖 button back to the agents.
 > - **Classifier:** OpenAI, not Claude (ticket 05). `CLASSIFIER_*` settings are `NOTES_CLASSIFIER_*`.
 > - **Testing:** no automated tests (ai_agents ADR-001). "Testing Decisions" and every "(seam N)"
 >   tag below are historical; checks are manual or through `uv run notes-smoke`.

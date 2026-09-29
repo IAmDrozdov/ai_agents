@@ -31,7 +31,15 @@ from ..catalog import (
     TG_DOWNLOAD_LIMIT,
     option_label,
 )
-from ..keyboards import ActionOption, JobCB, MenuCB, action_menu, root_menu
+from ..keyboards import (
+    ActionOption,
+    JobCB,
+    MenuCB,
+    action_menu,
+    draft_menu,
+    root_menu,
+    save_only_menu,
+)
 from ..registry import RegistryEntry, by_id, entries_for
 from ..scrape import ScrapeError, filename_for, scrape_url
 from ..worker import MAX_QUEUED_JOBS_PER_USER, Job, JobQueue
@@ -90,6 +98,8 @@ class Pending:
     previews: dict[str, Preview] = field(default_factory=dict)
     estimates: dict[str, Estimate] = field(default_factory=dict)
     created_at: float = field(default_factory=time.monotonic)
+    # The admin's card also offers 💾 (ADR-015); the words to save live in `drafts`.
+    savable: bool = False
 
     @property
     def size_bytes(self) -> int:
@@ -135,6 +145,104 @@ def _remember_pending(chat_id: int, item: Pending) -> None:
     item.created_at = time.monotonic()
     pending[chat_id] = item
     _evict_pending()
+
+
+@dataclass(frozen=True)
+class Draft:
+    """What 💾 saves: the admin's own words, plus links hidden behind text."""
+
+    text: str
+    links: tuple[str, ...] = ()
+
+
+# (chat id, card message id) → Draft, until saved, cancelled, run or evicted.
+DRAFTS_MAX = 50
+drafts: dict[tuple[int, int], Draft] = {}
+# chat id → the card message the in-flight intake may still edit. Cancel and 💾 close a
+# card, so one that finishes pricing afterwards does not overwrite what the user chose; a
+# newer message supersedes it (one pending job per chat).
+_live: dict[int, int] = {}
+_closed: dict[tuple[int, int], None] = {}
+
+
+def _is_live(message: Message) -> bool:
+    return _live.get(message.chat.id) == message.message_id
+
+
+def _close(message: Message) -> None:
+    if _is_live(message):
+        del _live[message.chat.id]
+    _closed[(message.chat.id, message.message_id)] = None
+    while len(_closed) > DRAFTS_MAX:
+        del _closed[next(iter(_closed))]
+
+
+async def _still_live(status: Message) -> bool:
+    """False when the card was closed or superseded; a superseded card says so."""
+    if _is_live(status):
+        return True
+    if (status.chat.id, status.message_id) not in _closed:
+        savable = (status.chat.id, status.message_id) in drafts
+        await status.edit_text(
+            "⏭ Replaced by your newer message.",
+            reply_markup=save_only_menu() if savable else None,
+        )
+    return False
+
+
+def _remember_draft(chat_id: int, message_id: int, draft: Draft) -> None:
+    drafts[(chat_id, message_id)] = draft
+    while len(drafts) > DRAFTS_MAX:
+        del drafts[next(iter(drafts))]
+
+
+def restore_draft(chat_id: int, message_id: int, draft: Draft) -> None:
+    """Give a Draft back to its card after a failed save, so 💾 can be tried again."""
+    _remember_draft(chat_id, message_id, draft)
+
+
+def _pop_pending_for(message: Message) -> Pending | None:
+    """The chat's pending job, only if it belongs to this card; an older card never takes it."""
+    item = pending.get(message.chat.id)
+    if item is None or item.message_id != message.message_id:
+        return None
+    del pending[message.chat.id]
+    return item
+
+
+def take_draft(chat_id: int, message_id: int) -> Draft | None:
+    """Claim a card's Draft for saving; the card stops being a job."""
+    draft = drafts.pop((chat_id, message_id), None)
+    if draft is None:
+        return None
+    if _live.get(chat_id) == message_id:
+        del _live[chat_id]
+    _closed[(chat_id, message_id)] = None
+    item = pending.get(chat_id)
+    if item is not None and item.message_id == message_id:
+        del pending[chat_id]
+    return draft
+
+
+async def _open_card(message: Message, status_text: str, draft: Draft | None) -> Message:
+    """The immediate answer: a status line (with 💾 / Cancel for the admin) that becomes the card."""
+    status = await message.answer(status_text, reply_markup=draft_menu() if draft else None)
+    _live[message.chat.id] = status.message_id
+    if draft is not None:
+        _remember_draft(message.chat.id, status.message_id, draft)
+    return status
+
+
+async def _fail_card(status: Message, text: str, savable: bool) -> None:
+    if not await _still_live(status):
+        return
+    # A failed card is no job: the chat's earlier pending card, if any, is live again.
+    item = pending.get(status.chat.id)
+    if item is not None and item.message_id is not None and item.message_id != status.message_id:
+        _live[status.chat.id] = item.message_id
+    else:
+        del _live[status.chat.id]
+    await status.edit_text(text, reply_markup=save_only_menu() if savable else None)
 
 
 _URL_RE = re.compile(r"https?://[^\s<>]+")
@@ -289,26 +397,36 @@ async def _render_actions(message: Message, user_id: int, item: Pending) -> None
         try:
             await _run_intake(user_id, _prepare, item, stored)
         except TimeoutError:
-            pending.pop(message.chat.id, None)
-            await message.edit_text("❌ That took too long to prepare. Please try again.")
+            if pending.get(message.chat.id) is item:
+                del pending[message.chat.id]
+            await _fail_card(
+                message, "❌ That took too long to prepare. Please try again.", item.savable
+            )
             return
+    if not await _still_live(message):
+        return
     effective = user_config.effective_settings(stored)
     # _action_options reads the jobs table through eta.predict_seconds — off the loop.
     options, errors = await asyncio.to_thread(_action_options, item, stored)
     if not options:
-        pending.pop(message.chat.id, None)
+        if pending.get(message.chat.id) is item:
+            del pending[message.chat.id]
         detail = "; ".join(f"{a}: {e}" for a, e in errors.items()) or "unknown error"
-        await message.edit_text(f"❌ Cannot process this: {html.escape(detail)}")
+        await _fail_card(message, f"❌ Cannot process this: {html.escape(detail)}", item.savable)
+        return
+    if not await _still_live(message):
         return
     await message.edit_text(
         _card_text(item, effective, options, errors),
-        reply_markup=action_menu(options),
+        reply_markup=action_menu(options, savable=item.savable),
     )
 
 
-async def _begin_pending(message: Message, source: Source, user_id: int, status_text: str) -> None:
-    status = await message.answer(status_text)
-    item = Pending(source=source, message_id=status.message_id)
+async def _begin_pending(
+    message: Message, source: Source, user_id: int, status_text: str, draft: Draft | None = None
+) -> None:
+    status = await _open_card(message, status_text, draft)
+    item = Pending(source=source, message_id=status.message_id, savable=draft is not None)
     _remember_pending(message.chat.id, item)
     await _render_actions(status, user_id, item)
 
@@ -350,6 +468,37 @@ async def document_handler(message: Message, bot: Bot) -> None:
     await _begin_pending(message, DocumentSource(file_bytes, filename), user.id, "⏳ Estimating…")
 
 
+def _body(message: Message) -> str:
+    return (message.text or message.caption or "").strip()
+
+
+def _is_admin_input(message: Message) -> bool:
+    """The admin's non-command text or caption (not a file): ask what to do with it."""
+    user = message.from_user
+    if user is None or not is_admin(user.id) or message.document is not None:
+        return False
+    body = _body(message)
+    return bool(body) and not body.startswith("/")
+
+
+@router.message(_is_admin_input)
+async def admin_input_handler(message: Message) -> None:
+    """Admin: one card for anything sent — 💾 to notes, the priced agents, or Cancel (ADR-015)."""
+    user = message.from_user
+    if user is None:
+        return
+    body = _body(message)
+    entities = message.entities or message.caption_entities or []
+    links = tuple(e.url for e in entities if e.type == "text_link" and e.url)
+    draft = Draft(text=body, links=links)
+    url = _first_url(body) or (links[0] if links else None)
+    if url is not None:
+        await offer_link(message, url, user.id, draft)
+        return
+    source = DocumentSource(body.encode("utf-8"), "message.txt")
+    await _begin_pending(message, source, user.id, "⏳ Estimating…", draft)
+
+
 @router.message(_looks_like_link)
 async def link_handler(message: Message) -> None:
     """A pasted link → YouTube goes to the link workflows, anything else is scraped to a document."""
@@ -360,37 +509,40 @@ async def link_handler(message: Message) -> None:
     await offer_link(message, url, user.id)
 
 
-async def offer_link(message: Message, url: str, user_id: int) -> None:
-    """Price card for a link, answered in `message`'s chat; also the notes Acknowledgement's entry."""
+async def offer_link(message: Message, url: str, user_id: int, draft: Draft | None = None) -> None:
+    """Price card for a link in `message`'s chat; with a Draft the card also offers 💾."""
     if _is_youtube_url(url):
-        await _begin_pending(message, LinkSource(url), user_id, "📡 Fetching video info…")
+        await _begin_pending(message, LinkSource(url), user_id, "📡 Fetching video info…", draft)
         return
 
-    status = await message.answer("🔗 Fetching the link…")
+    savable = draft is not None
+    status = await _open_card(message, "🔗 Fetching the link…", draft)
     try:
         article = await _run_intake(user_id, scrape_url, url)
     except ScrapeError as exc:
-        await status.edit_text(f"❌ {html.escape(str(exc))}")
+        await _fail_card(status, f"❌ {html.escape(str(exc))}", savable)
         return
     except TimeoutError:
-        await status.edit_text("❌ That took too long to fetch. Please try again.")
+        await _fail_card(status, "❌ That took too long to fetch. Please try again.", savable)
         return
     except Exception:
         log.exception("link scrape failed for %s", url)
-        await status.edit_text("❌ Something went wrong fetching that link.")
+        await _fail_card(status, "❌ Something went wrong fetching that link.", savable)
+        return
+    if not await _still_live(status):
         return
 
     source = DocumentSource(article.markdown.encode("utf-8"), filename_for(article))
-    item = Pending(source=source, message_id=status.message_id)
+    item = Pending(source=source, message_id=status.message_id, savable=savable)
     _remember_pending(message.chat.id, item)
-    await status.edit_text("⏳ Estimating…")
+    await status.edit_text("⏳ Estimating…", reply_markup=draft_menu() if savable else None)
     await _render_actions(status, user_id, item)
 
 
 @router.callback_query(JobCB.filter(F.action == "run"))
 async def run_job_handler(callback: CallbackQuery, callback_data: JobCB, queue: JobQueue) -> None:
     message = _accessible(callback)
-    item = pending.pop(message.chat.id, None) if message else None
+    item = _pop_pending_for(message) if message else None
     workflow_id = callback_data.workflow
     entry = by_id(workflow_id) if workflow_id else None
     if item is None or message is None or entry is None:
@@ -447,6 +599,7 @@ async def run_job_handler(callback: CallbackQuery, callback_data: JobCB, queue: 
             estimated_cost_usd=estimate.cost.total_usd,
         )
         position = queue.put(job)
+    drafts.pop((message.chat.id, message.message_id), None)
     await callback.answer()
     suffix = f" · {eta_label}" if eta_label else ""
     text = f"🚀 Starting…{suffix}" if position == 1 else f"⏳ Queued, position {position}{suffix}"
@@ -467,7 +620,7 @@ async def job_settings_handler(callback: CallbackQuery) -> None:
 async def back_to_job_handler(callback: CallbackQuery) -> None:
     message = _accessible(callback)
     item = pending.get(message.chat.id) if message else None
-    if item is None or message is None:
+    if item is None or message is None or item.message_id != message.message_id:
         await callback.answer("This job has expired — send the document again.", show_alert=True)
         return
     await callback.answer("Re-estimating…")
@@ -480,6 +633,8 @@ async def back_to_job_handler(callback: CallbackQuery) -> None:
 async def cancel_pending_handler(callback: CallbackQuery) -> None:
     message = _accessible(callback)
     if message is not None:
-        pending.pop(message.chat.id, None)
+        _pop_pending_for(message)
+        drafts.pop((message.chat.id, message.message_id), None)
+        _close(message)
         await message.edit_text("✖️ Cancelled")
     await callback.answer()

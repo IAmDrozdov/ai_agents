@@ -84,9 +84,10 @@ are estimates; check your OpenAI invoice.
 
 ## Notes (admin only)
 
-The admin's bot also works as a save-for-later store (`apps/notes`, ADR-015): any text or
-link you send is saved at once, enriched with its title, author and caption, and filed into
-Sections. A link's reply has a 🤖 button that opens the usual price card for it. Sort and
+The admin's bot also works as a save-for-later store (`apps/notes`, ADR-015). Any text or
+link you send gets one card: 💾 save to notes, the priced agents (translate, voice, dub), or
+Cancel. A saved item is enriched with its title, author and caption and filed into
+Sections; its 🤖 button brings the agents back later. Sort and
 tidy on the notes web UI (`notes-web`, loopback `:8082`, SSH tunnel). Invitees never see it.
 Details: `apps/notes/README.md`.
 

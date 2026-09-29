@@ -16,9 +16,9 @@ from shared.obs import get_logger
 log = get_logger(__name__)
 
 HELP = (
-    "\n\n📌 <b>Notes</b> (admin only): any text or link you send is saved first and filed "
-    "into sections; a link's reply has a button to run the agents above on it. "
-    "Browse and sort on the notes web UI (SSH tunnel, port 8082)."
+    "\n\n📌 <b>Notes</b> (admin only): any text or link you send gets a card — "
+    "💾 save to notes, one of the agents above, or cancel. Saved items are filed into "
+    "sections; browse and sort them on the notes web UI (SSH tunnel, port 8082)."
 )
 STATUS_LABELS = {"new": "новое", "started": "начато", "done": "готово"}
 DUPLICATE_PREFIX = {

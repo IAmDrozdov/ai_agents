@@ -27,14 +27,19 @@ thin-adapter rule (ADR-005).
    (providers, SSRF guard, pipeline, sweeper) and the Classifier port. The pipeline reports
    through a `notify(item)` callback instead of calling Telegram. Its glossary, ADRs 0001–0006,
    spec and tickets moved along under `apps/notes/`.
-3. **Interfaces.** `interfaces/telegram_bot` gains an admin-only notes router
-   (`handlers/notes.py`, `notes_ui.py`). `interfaces/notes_web` is the sorting UI, a
+3. **Interfaces.** `interfaces/telegram_bot` gains an admin-only 💾 path
+   (`documents.admin_input_handler`, `handlers/notes.py`, `notes_ui.py`). `interfaces/notes_web` is the sorting UI, a
    separate `notes-web` service on `127.0.0.1:8082`, reached over SSH like the dashboard.
-4. **Routing: save first for the admin.** The notes router is registered before
-   `documents`. Every non-command text or link from the admin becomes an Item at once
-   (notes ADR-0006). A link's Acknowledgement carries a 🤖 button that runs the unchanged
-   link flow (`documents.offer_link`) and shows the usual price card. Documents still go
-   straight to the price card. Invitees see no change.
+4. **Routing: ask first for the admin** (revised 2026-09-29 after trying save-first in
+   Telegram). Every non-command text or link from the admin is answered at once with
+   `[💾 В заметки] [✖️ Cancel]`. The same message then becomes the usual price card with 💾
+   on top. Plain text is priced as a `.txt` document. If fetching or pricing fails, the card
+   keeps 💾, so an unscrapable link (Instagram, TikTok) can still be saved. 💾 turns the card
+   into the Item's Acknowledgement. Notes ADR-0006 (save first, enrich second) still holds
+   once 💾 is tapped. A saved link's 🤖 button reopens the card. Documents never offer 💾.
+   Invitees see no change. A card that was cancelled or saved while it was still being
+   priced is no longer overwritten when pricing finishes, which also fixes an old Cancel
+   race for everyone.
 5. **Storage.** A separate sqlite file (`NOTES_DB_PATH`, `/data/notes.sqlite3` in
    production) on the existing `appdata` volume. Notes and the bot's usage tables share
    nothing.
@@ -48,9 +53,8 @@ thin-adapter rule (ADR-005).
 ## Consequences
 
 + One bot, one deploy, one set of hardening and docs.
-+ The admin's pasted links are saved even when they were only meant to be dubbed or
-  translated. The price card is one tap further away, and a link sent twice answers with
-  the saved Item and the same button.
++ One card answers "what do I do with this?" for anything the admin sends. Nothing is
+  saved without the admin choosing it.
 - A new layer to learn. The checker enforces it, and `docs/architecture.md` describes it.
 - Enrichment's outbound fetches run in the bot container (SSRF-guarded, same caps).
 - maxi-notes' git history stays in that repo; this repo starts Notes at the merge commit.

@@ -45,7 +45,7 @@ async def _run() -> None:
     dp = Dispatcher()
     queue = JobQueue()
     dp["queue"] = queue
-    # Notes is admin-only (ADR-015): if it cannot start, the bot runs without it.
+    # Notes is admin-only (ADR-015): if it cannot start, the bot runs without it and 💾 says so.
     try:
         notes = build_notes_runtime()
     except Exception:
@@ -53,7 +53,7 @@ async def _run() -> None:
         notes = None
     dp["notes"] = notes
     dp.update.outer_middleware(AccessMiddleware())
-    setup_routers(dp, notes_enabled=notes is not None)
+    setup_routers(dp)
 
     # Held so the loop task is not garbage collected mid-flight.
     background: set[asyncio.Task[None]] = set()

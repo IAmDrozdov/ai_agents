@@ -95,10 +95,14 @@ re-priced at Run) would exceed it; the admin is exempt. The window is fixed in `
 
 ## Notes (admin only)
 
-`handlers/notes.py` sits before `documents`: the admin's non-command text and links become notes
-Items (`apps/notes`, ADR-015), acknowledged in Russian (`notes_ui.py`) and enriched in the
-background. The 🤖 button on a link runs `documents.offer_link`, the same flow a pasted link
-takes for everyone else. The notes sweeper starts next to the worker in `__main__.py`.
+`documents.admin_input_handler` answers the admin's non-command text and links with a card at
+once: `[💾 В заметки] [✖️ Cancel]` while it prices, then 💾 on top of the usual agents. Plain text
+is priced as `message.txt`. 💾 (`JobCB(action="save")`, handled in `handlers/notes.py`) saves the
+message as notes Items (`apps/notes`, ADR-015) and turns the card into the Russian
+Acknowledgement (`notes_ui.py`), enriched in the background. A saved link's 🤖 button runs
+`documents.offer_link` again. Cards closed by Cancel or 💾 are never overwritten by a late
+price; one replaced by a newer message says so and keeps 💾. The notes sweeper starts next to
+the worker in `__main__.py`; if notes cannot start, the bot runs and 💾 says so.
 
 ## Dashboard
 

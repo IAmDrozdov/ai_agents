@@ -46,7 +46,7 @@ class TryCB(CallbackData, prefix="t"):
 
 
 class JobCB(CallbackData, prefix="j"):
-    """Pending-job actions: action is 'run', 'settings', 'cancel'."""
+    """Pending-job actions: action is 'run', 'settings', 'cancel', 'save' (admin: to notes)."""
 
     action: str
     workflow: str = ""
@@ -129,9 +129,30 @@ def keep_menu(key_id: int, idx: int) -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def action_menu(options: list[ActionOption]) -> InlineKeyboardMarkup:
-    """One button per priced agent; tap runs. Settings + Cancel on the last row."""
+SAVE_LABEL = "💾 В заметки"
+
+
+def draft_menu() -> InlineKeyboardMarkup:
+    """The admin's immediate answer while the card is still being priced."""
     builder = InlineKeyboardBuilder()
+    builder.button(text=SAVE_LABEL, callback_data=JobCB(action="save"))
+    builder.button(text="✖️ Cancel", callback_data=JobCB(action="cancel"))
+    builder.adjust(2)
+    return builder.as_markup()
+
+
+def save_only_menu() -> InlineKeyboardMarkup:
+    """When no agent can take it, the admin can still keep it."""
+    builder = InlineKeyboardBuilder()
+    builder.button(text=SAVE_LABEL, callback_data=JobCB(action="save"))
+    return builder.as_markup()
+
+
+def action_menu(options: list[ActionOption], *, savable: bool = False) -> InlineKeyboardMarkup:
+    """Save (admin) first, then one button per priced agent; tap runs. Settings + Cancel last."""
+    builder = InlineKeyboardBuilder()
+    if savable:
+        builder.button(text=SAVE_LABEL, callback_data=JobCB(action="save"))
     for opt in options:
         parts = [opt.label, opt.cost_label]
         if opt.eta_label:
@@ -142,6 +163,6 @@ def action_menu(options: list[ActionOption]) -> InlineKeyboardMarkup:
         )
     builder.button(text="⚙️ Settings", callback_data=JobCB(action="settings"))
     builder.button(text="✖️ Cancel", callback_data=JobCB(action="cancel"))
-    rows = [1] * len(options) + [2]
+    rows = [1] * (len(options) + int(savable)) + [2]
     builder.adjust(*rows)
     return builder.as_markup()
