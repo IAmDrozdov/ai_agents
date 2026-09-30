@@ -1,4 +1,5 @@
-# Run before a deploy: grype dir:. --only-fixed
+# Run by deploy.sh's preflight; by hand: grype dir:. --only-fixed
+fail-on-severity: high
 exclude:
   - ./.venv/**
   - ./.git/**

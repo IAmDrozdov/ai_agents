@@ -10,7 +10,7 @@ ssh_key_name = "my-laptop"
 # droplet_size = "s-1vcpu-1gb"
 # droplet_name = "ai-agents"
 
-# Lock SSH to your own address. Get it with `curl -s ifconfig.me`. Leave the
-# default (whole internet) if your address changes often — a stale value here
-# locks you out of the droplet.
+# SSH is closed by default: infrastructure/ssh-gate.sh (and deploy.sh through it) opens
+# port 22 for your current address and closes it again (ADR-017). A static list here is a
+# break-glass for when the gate cannot be used.
 # ssh_allowed_cidrs = ["203.0.113.4/32"]

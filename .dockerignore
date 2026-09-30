@@ -20,3 +20,5 @@ infrastructure/terraform
 .idea
 .vscode
 .claude
+CLAUDE.local.md
+dist

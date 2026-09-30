@@ -22,7 +22,8 @@ uv run pre-commit install        # once
 uv run pre-commit run --all-files
 ```
 
-That runs ruff (fix + format), ty, and the layer checker.
+That runs ruff (fix + format), ty, the layer checker and a secrets scan. The scan needs
+`trufflehog` on your PATH (`brew install trufflehog`) and also runs when you push.
 
 ## Scope that needs a conversation first
 

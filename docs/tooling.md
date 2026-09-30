@@ -25,11 +25,17 @@ Setup once:
 uv run pre-commit install
 ```
 
+This installs both the commit and the push hook (`default_install_hook_types`).
+
 Hooks on commit:
 - `ruff-check` (`--fix`)
 - `ruff-format`
 - `ty-check` (staged py)
 - `check-layers` (full repo, always)
+- `check-secrets` (`tools/check_secrets.sh`: trufflehog over the git history and the staged
+  files, offline; needs `brew install trufflehog`)
+
+Hook on push: `check-secrets` again, so a commit made with `--no-verify` still cannot leave.
 
 Manual full run:
 
@@ -59,11 +65,12 @@ uv run python tools/check_layers.py
 
 ## grype (dependency vulnerabilities)
 
-Before a deploy:
+`deploy.sh` runs it in its preflight, next to the secrets scan (ADR-017). By hand:
 
 ```bash
 grype dir:. --only-fixed
 ```
 
-Scans `uv.lock`; excludes and known false positives live in `.grype.yaml`. Fix with
-`uv lock --upgrade-package <pkg>` then `uv sync --all-packages`.
+Scans `uv.lock` and exits non-zero on High or worse (`fail-on-severity` in `.grype.yaml`, which
+also holds the excludes and known false positives). Fix with `uv lock --upgrade-package <pkg>`
+then `uv sync --all-packages`.

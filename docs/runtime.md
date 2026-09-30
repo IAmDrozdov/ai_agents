@@ -17,8 +17,9 @@ the notes path or the deploy. Shorthand: `telegram_bot/x.py` and `handlers/x.py`
 
 The services share only the `appdata` volume (`/data/*.sqlite3`, WAL mode, a connection per
 call). The bot reaches `warp` through `YTDLP_PROXY=socks5h://warp:40000`, and `funnel` reaches
-`miniapp` at `http://miniapp:8083`. The droplet accepts inbound SSH only: Telegram is polled
-outbound, and the Mini App is published by the funnel sidecar's outbound tunnel.
+`miniapp` at `http://miniapp:8083`. The droplet accepts no inbound connections: Telegram is polled
+outbound, the Mini App is published by the funnel sidecar's outbound tunnel, and SSH is opened
+for the operator's address only while `infrastructure/ssh-gate.sh` runs a command (ADR-017).
 
 ## The three agents (workflows, ADR-012)
 

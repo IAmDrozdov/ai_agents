@@ -18,16 +18,19 @@ resource "digitalocean_droplet" "app" {
   }
 }
 
-# Inbound: SSH only. The Mini App is published by the funnel sidecar (Tailscale Funnel,
-# an outbound tunnel), so it needs no inbound rule.
+# Inbound: nothing by default. ssh-gate.sh opens tcp/22 for the deploying address (ADR-017),
+# and the Mini App is published by the funnel sidecar's outbound tunnel.
 resource "digitalocean_firewall" "app" {
   name        = "${var.droplet_name}-fw"
   droplet_ids = [digitalocean_droplet.app.id]
 
-  inbound_rule {
-    protocol         = "tcp"
-    port_range       = "22"
-    source_addresses = var.ssh_allowed_cidrs
+  dynamic "inbound_rule" {
+    for_each = length(var.ssh_allowed_cidrs) > 0 ? [1] : []
+    content {
+      protocol         = "tcp"
+      port_range       = "22"
+      source_addresses = var.ssh_allowed_cidrs
+    }
   }
 
   outbound_rule {

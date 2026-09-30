@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Deploy the repo to the droplet and (re)start its services.
-# Usage: [SSH_KEY=~/.ssh/key] ./infrastructure/deploy.sh [droplet-ip]
+# Usage: [SSH_KEY=~/.ssh/key] [SKIP_PREFLIGHT=1] ./infrastructure/deploy.sh [droplet-ip]
 # SSH_KEY is optional; unset means ssh-agent / ~/.ssh/config pick the identity.
+# Needs DO_API_KEY in .env: the droplet's SSH port is opened for this run only (ssh-gate.sh).
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -10,6 +11,34 @@ IP="${1:-$(terraform -chdir="$REPO_ROOT/infrastructure/terraform" output -raw dr
 SSH_OPTS=(${SSH_KEY:+-i "$SSH_KEY"} -o StrictHostKeyChecking=accept-new)
 COMPOSE="docker compose -f /opt/ai_agents/src/infrastructure/docker/docker-compose.yml"
 APP_UID=10001
+RSYNC_EXCLUDES=(
+  --exclude .git --exclude .venv --exclude '.env*' --exclude '__pycache__'
+  --exclude .ruff_cache --exclude .ty_cache --exclude .local --exclude data
+  --exclude node_modules --exclude 'infrastructure/terraform/.terraform'
+  --exclude '*.tfstate*' --exclude 'infrastructure/terraform/terraform.tfvars'
+  --exclude .DS_Store --exclude dist --exclude .uv-cache
+  --exclude .claude --exclude .cursor --exclude .vscode
+  --exclude '*.sqlite3*' --exclude CLAUDE.local.md
+)
+
+# rsync ships the working tree, not git, so the files to ship are scanned as well as the history.
+preflight() {
+  echo "==> preflight: secrets in git history and in the files to ship, vulnerable dependencies"
+  command -v grype >/dev/null || { echo "ERROR: grype is not installed (brew install grype)" >&2; exit 1; }
+  "$REPO_ROOT/tools/check_secrets.sh"
+  local staging
+  staging="$(mktemp -d)"
+  rsync -a "${RSYNC_EXCLUDES[@]}" "$REPO_ROOT/" "$staging/"
+  trufflehog filesystem "$staging" --no-verification --no-update --fail || { rm -rf "$staging"; exit 1; }
+  rm -rf "$staging"
+  (cd "$REPO_ROOT" && grype dir:. --only-fixed)
+}
+
+# SSH is closed by default (ADR-017): check first, then run the whole deploy inside the gate.
+if [ -z "${SSH_GATE_HELD:-}" ]; then
+  [ -n "${SKIP_PREFLIGHT:-}" ] || preflight
+  exec "$REPO_ROOT/infrastructure/ssh-gate.sh" run "$0" "$@"
+fi
 
 # Optional WARP egress sidecar (ADR-014): opt-in by accepting Cloudflare's terms in .env.
 WARP_ACCEPT_TOS="$(grep -E '^WARP_ACCEPT_TOS=' "$REPO_ROOT/.env" | tail -n 1 | cut -d= -f2- || true)"
@@ -40,13 +69,7 @@ fi
 echo "==> syncing repo to root@$IP:/opt/ai_agents/src"
 rsync -az --delete \
   -e "ssh ${SSH_OPTS[*]}" \
-  --exclude .git --exclude .venv --exclude '.env*' --exclude '__pycache__' \
-  --exclude .ruff_cache --exclude .ty_cache --exclude .local --exclude data \
-  --exclude node_modules --exclude 'infrastructure/terraform/.terraform' \
-  --exclude '*.tfstate*' --exclude 'infrastructure/terraform/terraform.tfvars' \
-  --exclude .DS_Store --exclude dist --exclude .uv-cache \
-  --exclude .claude --exclude .cursor --exclude .vscode \
-  --exclude '*.sqlite3*' \
+  "${RSYNC_EXCLUDES[@]}" \
   "$REPO_ROOT/" "root@$IP:/opt/ai_agents/src/"
 
 echo "==> uploading bot.env (allow-listed keys only)"
@@ -71,13 +94,23 @@ printf 'TS_AUTHKEY=%s\n' "$TS_AUTHKEY" \
 echo "==> building and starting services"
 # The containers run as uid $APP_UID, so the sqlite volume must belong to it. The
 # chown is idempotent and only matters the first time after the non-root switch.
+# ai_agents:previous moves only when the layers changed (the image id changes on every build);
+# the old image needs a tag of its own to survive the build.
 ssh "${SSH_OPTS[@]}" "root@$IP" "
   set -e
+  docker tag ai_agents:latest ai_agents:before-build 2>/dev/null || true
   $COMPOSE build --pull
+  layers() { docker image inspect -f '{{json .RootFS.Layers}}' \"\$1\" 2>/dev/null || true; }
+  if [ -n \"\$(layers ai_agents:before-build)\" ] \
+     && [ \"\$(layers ai_agents:before-build)\" != \"\$(layers ai_agents:latest)\" ]; then
+    docker tag ai_agents:before-build ai_agents:previous
+  fi
+  docker rmi ai_agents:before-build >/dev/null 2>&1 || true
   docker run --rm --user 0 -v docker_appdata:/data ai_agents:latest \
     chown -R $APP_UID:$APP_UID /data
   $COMPOSE up -d --remove-orphans
   docker image prune -f
+  docker builder prune -f --filter until=24h
 "
 
 echo "==> waiting for the services to come up"
@@ -110,12 +143,12 @@ if [ -n "$TS_AUTHKEY" ] && [ -n "$MINIAPP_URL" ]; then
     echo "OK: Mini App reachable at $MINIAPP_URL"
   else
     echo "WARNING: $MINIAPP_URL is not reachable yet (the first Funnel certificate can take minutes); the bot is up." >&2
-    echo "         ssh ${SSH_KEY:+-i $SSH_KEY} root@$IP '$COMPOSE logs --tail 40 funnel'" >&2
+    echo "         ./infrastructure/ssh-gate.sh ssh '$COMPOSE logs --tail 40 funnel'" >&2
   fi
 fi
 
 echo "==> done"
-echo "    logs:     ssh ${SSH_KEY:+-i $SSH_KEY} root@$IP '$COMPOSE logs -f bot'"
+echo "    logs:     ./infrastructure/ssh-gate.sh ssh '$COMPOSE logs -f bot'"
 if [ -n "$MINIAPP_URL" ]; then
   echo "    mini app: $MINIAPP_URL   (the 📒 button in the bot chat)"
 fi

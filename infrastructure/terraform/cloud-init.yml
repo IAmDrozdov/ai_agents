@@ -24,6 +24,12 @@ write_files:
       PermitRootLogin prohibit-password
       PasswordAuthentication no
       KbdInteractiveAuthentication no
+      AuthenticationMethods publickey
+      AllowUsers root
+      AllowAgentForwarding no
+      AllowTcpForwarding local
+      MaxAuthTries 3
+      LoginGraceTime 30
       X11Forwarding no
   # Docker's apt repo is not an allowed origin by default, so its fixes would never land.
   - path: /etc/apt/apt.conf.d/52-docker-and-reboot
@@ -31,7 +37,16 @@ write_files:
       Unattended-Upgrade::Origins-Pattern { "origin=Docker"; };
       Unattended-Upgrade::Automatic-Reboot "true";
       Unattended-Upgrade::Automatic-Reboot-Time "04:30";
+      APT::Periodic::AutocleanInterval "7";
+  - path: /etc/systemd/journald.conf.d/size.conf
+    content: |
+      [Journal]
+      SystemMaxUse=100M
 runcmd:
+  # Daemons a droplet never needs; about 45 MB of a 1 GB machine.
+  - systemctl disable --now multipathd.socket multipathd.service ModemManager.service udisks2.service fwupd-refresh.timer
+  - systemctl mask fwupd.service
+  - systemctl restart systemd-journald
   - systemctl enable --now docker
   - apt-get install -y fail2ban
   - systemctl enable --now fail2ban

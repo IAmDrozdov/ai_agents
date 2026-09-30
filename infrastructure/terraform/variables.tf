@@ -17,9 +17,9 @@ variable "droplet_size" {
 }
 
 variable "ssh_allowed_cidrs" {
-  description = "CIDRs allowed to reach port 22. Defaults to the whole internet; narrow it to your own address in terraform.tfvars once you are sure it is stable (a wrong value locks you out)."
+  description = "Static CIDRs allowed to reach port 22. Normally empty: infrastructure/ssh-gate.sh opens the port for one address at a time (ADR-017). Set it only as a break-glass when the gate cannot be used."
   type        = list(string)
-  default     = ["0.0.0.0/0", "::/0"]
+  default     = []
 }
 
 variable "droplet_name" {

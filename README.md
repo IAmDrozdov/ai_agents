@@ -104,8 +104,11 @@ Details: `apps/notes/README.md`.
   holds a key derived from the bot token, never the token.
 - Link enrichment for notes fetches pages from the bot process through an SSRF guard
   (public addresses only, every redirect re-checked).
-- In production the containers run read-only and non-root with memory and pid caps,
-  and the droplet exposes SSH only (`infrastructure/README.md`).
+- In production the containers run read-only and non-root with memory and pid caps, and the
+  droplet accepts no inbound connections: SSH is opened for the operator's address only for the
+  length of a deploy (ADR-017, `infrastructure/README.md`).
+- A secrets scan (trufflehog) runs on every commit, push and deploy, and a deploy stops on a
+  High dependency vulnerability (grype).
 - Untrusted documents are parsed inside the bot process; the caps above are the
   blast radius.
 

@@ -99,10 +99,10 @@ dp.update.outer_middleware(AccessMiddleware()); setup_routers(dp)
 ## 4. Production, after `deploy.sh` (free)
 
 ```bash
-IP=$(terraform -chdir=infrastructure/terraform output -raw droplet_ipv4)
+G=./infrastructure/ssh-gate.sh   # SSH is closed by default; the gate opens it for one command (ADR-017)
 C="docker compose -f /opt/ai_agents/src/infrastructure/docker/docker-compose.yml"
-ssh root@$IP "$C logs --since 10m bot | grep -ciE 'traceback|error|notes disabled'"   # expect 0
-ssh root@$IP "$C exec -T bot notes-smoke https://youtu.be/dQw4w9WgXcQ"
+$G ssh "$C logs --since 10m bot | grep -ciE 'traceback|error|notes disabled'"   # expect 0
+$G ssh "$C exec -T bot notes-smoke https://youtu.be/dQw4w9WgXcQ"
 ```
 
 - **Agents:** preview and estimate every agent inside the new image. This is free and exercises
@@ -112,8 +112,10 @@ ssh root@$IP "$C exec -T bot notes-smoke https://youtu.be/dQw4w9WgXcQ"
 - **Mini App:** on the droplet (outside your tailnet, so it is the public path), `curl -fsS
   $BOT_MINIAPP_URL/healthz` must answer and `/api/usage` without a header must be 401.
   `docker stats --no-stream` should sit inside the memory caps.
-- **Rollback point:** before a risky deploy, run `docker tag ai_agents:latest ai_agents:rollback-<n>`
-  on the droplet and back up the sqlite files. To roll back, redeploy the last good commit.
+- **Rollback point:** a deploy that changes the image tags the one that was running as
+  `ai_agents:previous`. To roll back, run `docker tag ai_agents:previous ai_agents:latest && $C up -d` on the droplet. Tag a
+  manual `ai_agents:rollback-<n>` only to keep a point across more than one deploy, and back up
+  the sqlite files before a schema change.
 
 ## 5. Telegram Web (the real chat), then the owner
 

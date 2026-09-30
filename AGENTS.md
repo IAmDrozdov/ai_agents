@@ -36,7 +36,8 @@ Monorepo of local AI workflows exposed through one job contract (`shared.job`, A
 - `apps/*` MUST NOT import: `workflows.*`, `interfaces.*`, another app, `aiogram`/`fastapi`/`starlette`/`uvicorn`.
 
 ## Pre-commit
-Hooks on `git commit`: ruff (`--fix` + format), ty (staged python), check_layers (full repo).
+Hooks on `git commit`: ruff (`--fix` + format), ty (staged python), check_layers (full repo),
+check_secrets (trufflehog over history + staged files; also runs on `git push`).
 Manual run: `uv run pre-commit run --all-files`.
 
 ## Stop and ask
