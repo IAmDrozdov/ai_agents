@@ -265,7 +265,7 @@ def _looks_like_link(message: Message) -> bool:
     return _first_url(message.text) is not None
 
 
-def _is_allowed(filename: str) -> bool:
+def is_agent_document(filename: str) -> bool:
     return PurePosixPath(filename.lower()).suffix in ALLOWED_EXTENSIONS
 
 
@@ -439,7 +439,7 @@ async def document_handler(message: Message, bot: Bot) -> None:
         return
 
     filename = document.file_name or "document"
-    if not _is_allowed(filename):
+    if not is_agent_document(filename):
         await message.answer(
             "Unsupported file type. Send a .pdf, .docx, .md, .markdown or .txt document."
         )
@@ -468,8 +468,19 @@ async def document_handler(message: Message, bot: Bot) -> None:
     await _begin_pending(message, DocumentSource(file_bytes, filename), user.id, "⏳ Estimating…")
 
 
-def _body(message: Message) -> str:
+def body_of(message: Message) -> str:
     return (message.text or message.caption or "").strip()
+
+
+def draft_of(message: Message) -> Draft:
+    """The admin's words and the links hidden behind text in `message`."""
+    entities = message.entities or message.caption_entities or []
+    links = tuple(e.url for e in entities if e.type == "text_link" and e.url)
+    return Draft(text=body_of(message), links=links)
+
+
+def first_link(draft: Draft) -> str | None:
+    return _first_url(draft.text) or (draft.links[0] if draft.links else None)
 
 
 def _is_admin_input(message: Message) -> bool:
@@ -477,7 +488,7 @@ def _is_admin_input(message: Message) -> bool:
     user = message.from_user
     if user is None or not is_admin(user.id) or message.document is not None:
         return False
-    body = _body(message)
+    body = body_of(message)
     return bool(body) and not body.startswith("/")
 
 
@@ -487,11 +498,9 @@ async def admin_input_handler(message: Message) -> None:
     user = message.from_user
     if user is None:
         return
-    body = _body(message)
-    entities = message.entities or message.caption_entities or []
-    links = tuple(e.url for e in entities if e.type == "text_link" and e.url)
-    draft = Draft(text=body, links=links)
-    url = _first_url(body) or (links[0] if links else None)
+    draft = draft_of(message)
+    body = draft.text
+    url = first_link(draft)
     if url is not None:
         await offer_link(message, url, user.id, draft)
         return

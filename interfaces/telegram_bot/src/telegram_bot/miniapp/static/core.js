@@ -65,6 +65,18 @@ export async function api(path, { method = "GET", body } = {}) {
   return response.status === 204 ? null : response.json();
 }
 
+const blobUrls = new Map();
+
+// An authed image as an object URL (an <img src> cannot carry the Authorization header); null if missing.
+export async function apiImageUrl(path) {
+  if (blobUrls.has(path)) return blobUrls.get(path);
+  const response = await fetch("/api" + path, { headers: { Authorization: "tma " + tg.initData } });
+  if (!response.ok) return null;
+  const url = URL.createObjectURL(await response.blob());
+  blobUrls.set(path, url);
+  return url;
+}
+
 let toastTimer = null;
 export function toast(text) {
   const box = document.getElementById("toast");

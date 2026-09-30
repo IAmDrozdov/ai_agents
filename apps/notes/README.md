@@ -42,6 +42,6 @@ check it as in `docs/verifying.md` §2.
 Tickets 01–04 were done in maxi-notes: a Note on the web, deploy, Links with dedupe, and
 Enrichment without an LLM. 05 (OpenAI Classifier) was done here. 11 is the Mini App skeleton, 08
 the sorting pass and 09 Section management in it (ADR-016). 06 (Filing keyboard) and 07 (Browse)
-are replaced by the app. 10 (housekeeping) is next. Their "(seam N)"
+are replaced by the app. 12 (direct save + look at the content) was done after. 10 (housekeeping) is next. Their "(seam N)"
 criteria predate the merge: check them by hand, with `notes-smoke` or with signed requests to the
 Mini App API, since this repo has no automated tests (ADR-001).

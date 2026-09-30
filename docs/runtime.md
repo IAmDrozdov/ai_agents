@@ -42,8 +42,8 @@ only, plus `/start <invite>`. Routers then match in the order set in
 |---|---|---|
 | `start` | `/start`, `/help` (the admin's help adds a notes line) | everyone |
 | `admin` | `/invite`, `/users`, `/revoke` | admin |
-| `notes` | callbacks only (`JobCB save`, `NotesCB`) | admin |
-| `documents` | a file → card; **admin** text or caption → card with 💾 (`admin_input_handler`); anyone else's text containing a URL → card (`link_handler`) | all |
+| `notes` | callbacks (`JobCB save`, `NotesCB`); messages: an Instagram / YouTube / TikTok link (`direct_link_handler`) and a photo, video or non-agent document (`file_handler`) are saved with no card (notes ADR-0007) | admin |
+| `documents` | an agent document (.pdf .docx .md .markdown .txt) → card; **admin** text or caption → card with 💾 (`admin_input_handler`); anyone else's text containing a URL → card (`link_handler`) | all |
 | `settings_menu`, `status` | `/settings`, `/status`, `/cancel` | all |
 
 Plain text without a URL from an invitee matches nothing and is ignored.

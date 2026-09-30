@@ -12,7 +12,7 @@ The one person the bot answers and the Mini App serves.
 _Avoid_: user, admin, account
 
 **Item**:
-One saved thing — a Link or a Note.
+One saved thing — a Link, a Note or a File.
 _Avoid_: entry, record, post, bookmark, запись
 
 **Link**:
@@ -22,6 +22,10 @@ _Avoid_: bookmark, url item
 **Note**:
 An Item that is plain text with no URL.
 _Avoid_: memo, message, text item
+
+**File**:
+An Item that is a photo, video or non-text document sent to the bot; Telegram keeps the bytes, notes keep the `file_id` and a preview image.
+_Avoid_: attachment, upload
 
 **Annotation**:
 The Owner's own words sent alongside a Link.

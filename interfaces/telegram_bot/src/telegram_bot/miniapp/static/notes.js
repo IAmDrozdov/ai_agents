@@ -4,6 +4,7 @@
 import {
   AuthError,
   api,
+  apiImageUrl,
   attempt,
   confirmAction,
   el,
@@ -35,12 +36,12 @@ const OTHER = "other";
 const STALE_AFTER_MS = 350;
 // The item fields the top of the item view shows; it is rebuilt only when one of them changes.
 const HEAD_FIELDS = [
-  "kind", "url", "title", "text", "source", "author", "gist",
+  "kind", "url", "title", "text", "source", "author", "gist", "file_name",
   "created_at", "enrichment_status", "enrichment_error", "caption",
 ]; // prettier-ignore
 
 const isHttp = (url) => /^https?:\/\//i.test(url || "");
-const itemTitle = (item) => item.title || item.url || item.text || "Без названия";
+const itemTitle = (item) => item.title || item.url || item.file_name || item.text || "Без названия";
 const originOf = (item) => [item.source, item.author].filter(Boolean).join(" · ");
 
 function fmtDate(ts) {
@@ -82,6 +83,14 @@ function card(item, handlers) {
     img.referrerPolicy = "no-referrer";
     img.src = item.image_url;
     node.append(img);
+  } else if (item.kind === "file") {
+    const img = el("img", "thumb");
+    img.alt = "";
+    node.append(img);
+    apiImageUrl(`/notes/items/${item.id}/preview`).then((url) => {
+      if (url) img.src = url;
+      else img.remove();
+    });
   }
 
   const body = el("div", "card-body");
@@ -90,8 +99,9 @@ function card(item, handlers) {
   else body.append(el("div", "title", title));
   const origin = originOf(item);
   if (origin) body.append(el("div", "origin", origin));
+  if (item.kind === "file" && item.file_name) body.append(el("div", "origin", "📎 " + item.file_name));
   if (item.gist) body.append(el("div", "gist", item.gist));
-  if (item.kind === "link" && item.text) body.append(el("div", "annotation", "✍️ " + item.text));
+  if (item.kind !== "note" && item.text) body.append(el("div", "annotation", "✍️ " + item.text));
 
   const meta = el("div", "meta");
   for (const section of item.sections) meta.append(sectionChip(section));
@@ -692,7 +702,7 @@ export async function mountNotes(root, launch = {}) {
     const current = new Set(item.sections.map((section) => section.slug));
     for (const [slug, button] of sectionButtons) button.classList.toggle("on", current.has(slug));
     for (const [value, button] of statusButtons) button.classList.toggle("on", item.status === value);
-    setText(noteTitle, item.kind === "link" ? "Моя пометка" : "Текст заметки");
+    setText(noteTitle, item.kind === "note" ? "Текст заметки" : "Моя пометка");
     const saved = item.text || "";
     if (state.draft == null && area.value !== saved) area.value = saved;
     save.disabled = area.value === saved;

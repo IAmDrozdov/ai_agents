@@ -18,6 +18,7 @@ USER_AGENT = "ai-agents-notes/1.0 (+https://github.com/IAmDrozdov/ai_agents)"
 TIMEOUT_S = 10
 MAX_REDIRECTS = 3
 MAX_BODY_BYTES = 2_000_000
+MAX_IMAGE_BYTES = 1_000_000
 _REDIRECTS = {301, 302, 303, 307, 308}
 
 
@@ -25,6 +26,8 @@ class HttpClient(Protocol):
     async def get_json(self, url: str) -> dict[str, Any]: ...
 
     async def get_html(self, url: str) -> str: ...
+
+    async def get_image(self, url: str) -> tuple[bytes, str]: ...
 
 
 class AiohttpClient:
@@ -43,7 +46,26 @@ class AiohttpClient:
     async def get_html(self, url: str) -> str:
         return await self._get(url, guard=True)
 
+    async def get_image(self, url: str) -> tuple[bytes, str]:
+        """(bytes, mime) of an image behind the SSRF guard; FetchError if it is not one or too big."""
+        body, content_type = await self._fetch(url, guard=True, limit=MAX_IMAGE_BYTES + 1)
+        mime = content_type.split(";")[0].strip().lower()
+        if not mime.startswith("image/"):
+            raise FetchError("not an image")
+        if len(body) > MAX_IMAGE_BYTES:
+            raise FetchError("image too large")
+        return body, mime
+
     async def _get(self, url: str, *, guard: bool) -> str:
+        body, content_type = await self._fetch(url, guard=guard, limit=MAX_BODY_BYTES)
+        charset = "utf-8"
+        for part in content_type.split(";")[1:]:
+            key, _, value = part.strip().partition("=")
+            if key.lower() == "charset" and value:
+                charset = value.strip("\"'")
+        return body.decode(charset, errors="replace")
+
+    async def _fetch(self, url: str, *, guard: bool, limit: int) -> tuple[bytes, str]:
         if guard:
             await asyncio.to_thread(assert_fetchable, url)
         timeout = aiohttp.ClientTimeout(total=TIMEOUT_S)
@@ -61,8 +83,14 @@ class AiohttpClient:
                         if response.status >= 400:
                             raise FetchError(f"HTTP {response.status}")
                         # Metadata lives in the head, so a huge page is cut, not refused.
-                        body = await response.content.read(MAX_BODY_BYTES)
-                        return body.decode(response.charset or "utf-8", errors="replace")
+                        chunks: list[bytes] = []
+                        total = 0
+                        async for chunk in response.content.iter_chunked(65536):
+                            chunks.append(chunk)
+                            total += len(chunk)
+                            if total >= limit:
+                                break
+                        return b"".join(chunks)[:limit], response.headers.get("Content-Type", "")
                 raise FetchError("too many redirects")
         except aiohttp.ClientError as exc:
             raise FetchError(str(exc) or exc.__class__.__name__) from exc

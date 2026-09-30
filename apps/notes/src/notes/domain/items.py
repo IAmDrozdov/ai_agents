@@ -1,4 +1,4 @@
-"""Items: Links and Notes, their Filing, Status and Placement (ADR-0001..0003)."""
+"""Items: Links, Notes and Files, their Filing, Status and Placement (ADR-0001..0003)."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from notes.db import Database
 from notes.domain.sections import OTHER_SLUG, Section, _row_to_section, other_id
 from notes.domain.urls import normalize_url
 
-Kind = Literal["link", "note"]
+Kind = Literal["link", "note", "file"]
 Status = Literal["new", "started", "done"]
 Placement = Literal["active", "archived", "trashed"]
 EnrichmentStatus = Literal["pending", "done", "failed", "skipped"]
@@ -42,6 +42,10 @@ class Item:
     caption: str | None
     gist: str | None
     image_url: str | None
+    file_id: str | None
+    file_name: str | None
+    file_mime: str | None
+    file_size: int | None
     status: Status
     placement: Placement
     reviewed: bool
@@ -108,6 +112,10 @@ def _row_to_item(conn: sqlite3.Connection, row: sqlite3.Row) -> Item:
         caption=row["caption"],
         gist=row["gist"],
         image_url=row["image_url"],
+        file_id=row["file_id"],
+        file_name=row["file_name"],
+        file_mime=row["file_mime"],
+        file_size=row["file_size"],
         status=row["status"],
         placement=row["placement"],
         reviewed=bool(row["reviewed"]),
@@ -147,6 +155,47 @@ def capture_note(
             (item_id, other_id(db)),
         )
         return _fetch(conn, item_id)
+
+
+def capture_file(
+    db: Database,
+    *,
+    file_id: str,
+    file_name: str | None,
+    file_mime: str | None,
+    file_size: int | None,
+    annotation: str,
+    preview: tuple[bytes, str] | None,
+    chat_id: int | None = None,
+    now: datetime | None = None,
+) -> Item:
+    """Save a File (photo, video, other document): Telegram keeps the bytes, we keep a preview."""
+    with db.session() as conn:
+        cur = conn.execute(
+            "INSERT INTO items(kind, text, file_id, file_name, file_mime, file_size, tg_chat_id, "
+            "created_at, updated_at) VALUES ('file', ?, ?, ?, ?, ?, ?, ?, ?)",
+            (annotation, file_id, file_name, file_mime, file_size, chat_id, stamp(now), stamp(now)),
+        )
+        item_id = int(cur.lastrowid or 0)
+        conn.execute(
+            "INSERT INTO item_sections(item_id, section_id) VALUES (?, ?)",
+            (item_id, other_id(db)),
+        )
+        if preview is not None:
+            conn.execute(
+                "INSERT INTO item_previews(item_id, mime, data) VALUES (?, ?, ?)",
+                (item_id, preview[1], preview[0]),
+            )
+        return _fetch(conn, item_id)
+
+
+def get_preview(db: Database, item_id: int) -> tuple[bytes, str] | None:
+    """The stored preview image of a File as (bytes, mime), or None."""
+    with db.session(readonly=True) as conn:
+        row = conn.execute(
+            "SELECT data, mime FROM item_previews WHERE item_id=?", (item_id,)
+        ).fetchone()
+    return (bytes(row["data"]), row["mime"]) if row else None
 
 
 def capture_link(

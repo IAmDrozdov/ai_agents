@@ -29,15 +29,25 @@ def bare_host(url: str) -> str:
     return host
 
 
+def is_youtube(url: str) -> bool:
+    return bare_host(url) in ("youtube.com", "youtu.be", "music.youtube.com")
+
+
+def is_social_media(url: str) -> bool:
+    """Instagram or TikTok: a post/reel with a caption, never an article."""
+    host = bare_host(url)
+    return host == "instagram.com" or host == "tiktok.com" or host.endswith(".tiktok.com")
+
+
 def provider_for(url: str) -> Provider:
     from notes.enrich.providers import generic, instagram, tiktok, youtube
 
     host = bare_host(url)
-    if host in ("youtube.com", "youtu.be"):
+    if is_youtube(url):
         return youtube.fetch
     if host == "instagram.com":
         return instagram.fetch
-    if host == "tiktok.com" or host.endswith(".tiktok.com"):
+    if is_social_media(url):
         return tiktok.fetch
     return generic.fetch
 

@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import base64
 import json
+from typing import Any
 
 import openai
+from openai.types.chat import ChatCompletionContentPartParam
 from pydantic import BaseModel
 
 from notes.classify.port import (
@@ -27,8 +30,9 @@ SYSTEM_PROMPT = """\
 Ты раскладываешь то, что владелец сохранил «на потом» (ссылки и заметки), по его секциям \
 и пишешь суть по-русски.
 
-Тебе дают сохранённое (тип, ссылка, площадка, заголовок, автор, описание, слова владельца) \
-и список секций со slug, названием и подсказкой.
+Тебе дают сохранённое (тип, ссылка, площадка, заголовок, автор, описание, слова владельца, \
+имя файла, начало речи из видео) и список секций со slug, названием и подсказкой. Иногда \
+приложена картинка: обложка ролика или поста, либо сама сохранённая картинка.
 
 Правила:
 - sections: от 1 до 3 slug строго из списка, самые подходящие первыми. Слова владельца \
@@ -39,6 +43,10 @@ SYSTEM_PROMPT = """\
 если заголовка нет — короткий (до 8 слов) по содержанию. Для заметки — короткий \
 заголовок по-русски до 8 слов.
 - author: человек или канал, если это ясно; иначе null. Не выдумывай.
+- Сначала опирайся на слова владельца и описание. Картинку используй, когда описание пусто \
+или неясно; для профиля или файла без описания она может быть единственным источником.
+- confident: false, если по всему имеющемуся нельзя уверенно понять, о чём это, и начало речи \
+из видео помогло бы.
 """
 
 
@@ -47,6 +55,7 @@ class _Answer(BaseModel):
     gist: str
     title: str | None
     author: str | None
+    confident: bool
 
 
 def render_request(request: FilingRequest) -> str:
@@ -54,10 +63,12 @@ def render_request(request: FilingRequest) -> str:
     item = {
         "kind": request.kind,
         "url": request.url,
+        "file_name": request.file_name,
         "source": request.source,
         "title": request.title,
         "author": request.author,
         "caption": request.clipped_caption(),
+        "transcript": request.clipped_transcript(),
         "owner_words": request.annotation or None,
     }
     sections = [{"slug": s.slug, "name": s.name, "hint": s.hint} for s in request.sections]
@@ -71,15 +82,7 @@ class OpenAIClassifier:
 
     async def file(self, request: FilingRequest) -> Filing:
         try:
-            response = await self.client.chat.completions.parse(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": render_request(request)},
-                ],
-                response_format=_Answer,
-                max_completion_tokens=MAX_COMPLETION_TOKENS,
-            )
+            response = await self._parse(request)
         except (openai.LengthFinishReasonError, openai.ContentFilterFinishReasonError) as exc:
             raise ClassifierRefused(exc.__class__.__name__) from exc
         except (
@@ -105,6 +108,34 @@ class OpenAIClassifier:
             gist=answer.gist.strip(),
             title=(answer.title or "").strip() or None,
             author=(answer.author or "").strip() or None,
+            confident=answer.confident,
+        )
+
+    async def _parse(self, request: FilingRequest) -> Any:
+        try:
+            return await self._ask(request, with_image=request.image is not None)
+        except openai.BadRequestError as exc:
+            if request.image is None:
+                raise
+            log.warning("classifier rejected the image (%s), retrying without it", exc.message)
+            return await self._ask(request, with_image=False)
+
+    async def _ask(self, request: FilingRequest, *, with_image: bool) -> Any:
+        content: list[ChatCompletionContentPartParam] = [
+            {"type": "text", "text": render_request(request)}
+        ]
+        if with_image and request.image is not None:
+            encoded = base64.b64encode(request.image).decode()
+            url = f"data:{request.image_mime or 'image/jpeg'};base64,{encoded}"
+            content.append({"type": "image_url", "image_url": {"url": url, "detail": "low"}})
+        return await self.client.chat.completions.parse(
+            model=self.model,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": content},
+            ],
+            response_format=_Answer,
+            max_completion_tokens=MAX_COMPLETION_TOKENS,
         )
 
     def _log_cost(self, response: object) -> None:

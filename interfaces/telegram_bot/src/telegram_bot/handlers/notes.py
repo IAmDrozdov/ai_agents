@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import io
 from collections.abc import Coroutine
 from dataclasses import dataclass, field
 from typing import Any
 
+import aiohttp
 from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import CallbackQuery, Message
@@ -20,6 +22,7 @@ from notes.domain.items import Item
 from notes.domain.urls import extract_urls
 from notes.enrich.http import AiohttpClient, HttpClient
 from notes.enrich.pipeline import enrich_item
+from notes.enrich.providers import is_social_media, is_youtube
 from notes.sweeper import run_sweeper
 from shared.config import settings
 from shared.obs import get_logger
@@ -28,11 +31,27 @@ from .. import notes_ui
 from ..access import is_admin
 from ..keyboards import JobCB
 from ..notes_ui import NotesCB
-from .documents import Draft, offer_link, restore_draft, take_draft
+from .documents import (
+    Draft,
+    body_of,
+    draft_of,
+    first_link,
+    is_agent_document,
+    offer_link,
+    restore_draft,
+    take_draft,
+)
 
 log = get_logger(__name__)
 
 router = Router(name="notes")
+
+PREVIEW_MAX_BYTES = 300_000
+
+
+def is_direct_host(url: str) -> bool:
+    """Instagram, YouTube and TikTok links are saved as they are: there is no article to scrape."""
+    return is_youtube(url) or is_social_media(url)
 
 
 @dataclass
@@ -92,6 +111,12 @@ async def _save(card: Message, draft: Draft, bot: Bot, notes: NotesRuntime) -> N
         )
         is_new = capture.outcome == "new"
         captured.append((capture.item, None if is_new else notes_ui.duplicate(capture)))
+    await _acknowledge(card, captured, bot, notes)
+
+
+async def _acknowledge(
+    card: Message, captured: list[tuple[Item, str | None]], bot: Bot, notes: NotesRuntime
+) -> None:
     for index, (item, duplicate) in enumerate(captured):
         text = duplicate or notes_ui.acknowledgement(item)
         keyboard = notes_ui.item_keyboard(item)
@@ -112,6 +137,112 @@ async def _save(card: Message, draft: Draft, bot: Bot, notes: NotesRuntime) -> N
                 message_id=sent.message_id,
             )
             notes.enrich_later(bot, item.id)
+
+
+def _is_direct_link(message: Message) -> bool:
+    """The admin's message whose first link is Instagram, YouTube or TikTok: saved with no card."""
+    user = message.from_user
+    if user is None or not is_admin(user.id) or message.document is not None:
+        return False
+    if message.photo or message.video or body_of(message).startswith("/"):
+        return False
+    url = first_link(draft_of(message))
+    return url is not None and is_direct_host(url)
+
+
+@router.message(_is_direct_link)
+async def direct_link_handler(message: Message, bot: Bot, notes: NotesRuntime | None) -> None:
+    """Admin: an Instagram / YouTube / TikTok link goes straight to notes (ADR-0007)."""
+    user = message.from_user
+    draft = draft_of(message)
+    url = first_link(draft)
+    if user is None or url is None:
+        return
+    if notes is None:  # notes are down: keep the old path
+        await offer_link(message, url, user.id, draft)
+        return
+    card = await message.answer("💾 Сохраняю…")
+    try:
+        await _save(card, draft, bot, notes)
+    except Exception:
+        log.exception("notes: direct save of %s failed", url)
+        await card.edit_text("⚠️ Не удалось сохранить — пришли ещё раз.")
+
+
+def _is_admin_file(message: Message) -> bool:
+    """The admin's photo, video or document that is not an agent document (.pdf/.docx/.md/.txt)."""
+    user = message.from_user
+    if user is None or not is_admin(user.id):
+        return False
+    if message.photo or message.video:
+        return True
+    document = message.document
+    return document is not None and not is_agent_document(document.file_name or "document")
+
+
+def _file_facts(message: Message) -> tuple[str, str | None, str | None, int | None, Any]:
+    """(file_id, file_name, mime, size, thumbnail PhotoSize-like or None) of the media in `message`."""
+    if message.photo:
+        photos = message.photo
+        best = photos[-1]
+        return (
+            best.file_id,
+            None,
+            "image/jpeg",
+            best.file_size,
+            photos[-2] if len(photos) > 1 else best,
+        )
+    if message.video:
+        video = message.video
+        return video.file_id, video.file_name, video.mime_type, video.file_size, video.thumbnail
+    document = message.document
+    assert document is not None
+    return (
+        document.file_id,
+        document.file_name,
+        document.mime_type,
+        document.file_size,
+        document.thumbnail,
+    )
+
+
+async def _download_preview(bot: Bot, thumb: Any) -> tuple[bytes, str] | None:
+    if thumb is None or (thumb.file_size or 0) > PREVIEW_MAX_BYTES:
+        return None
+    buffer = io.BytesIO()
+    try:
+        await bot.download(thumb, destination=buffer)
+    except aiohttp.ClientError:  # aiohttp's error text embeds the download URL, which has the token
+        log.warning("notes: preview download failed")
+        return None
+    return (buffer.getvalue(), "image/jpeg") if buffer.getvalue() else None
+
+
+@router.message(_is_admin_file)
+async def file_handler(message: Message, bot: Bot, notes: NotesRuntime | None) -> None:
+    """Admin: a photo or non-text file is saved as a File Item, with its preview for the Mini App."""
+    if notes is None:
+        await message.answer("Notes are unavailable right now.")
+        return
+    file_id, file_name, mime, size, thumb = _file_facts(message)
+    card = await message.answer("💾 Сохраняю…")
+    try:
+        preview = await _download_preview(bot, thumb)
+        item = await asyncio.to_thread(
+            items.capture_file,
+            notes.db,
+            file_id=file_id,
+            file_name=file_name,
+            file_mime=mime,
+            file_size=size,
+            annotation=body_of(message),
+            preview=preview,
+            chat_id=card.chat.id,
+        )
+        await _acknowledge(card, [(item, None)], bot, notes)
+    except Exception:
+        log.exception("notes: saving a file failed")
+        await card.edit_text("⚠️ Не удалось сохранить — пришли ещё раз.")
 
 
 def _admin_message(callback: CallbackQuery) -> Message | None:

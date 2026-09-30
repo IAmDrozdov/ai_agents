@@ -8,6 +8,7 @@ dependencies = [
     "openai>=1.0",
     "pydantic>=2.7",
     "trafilatura>=1.12",
+    "yt-dlp>=2025.1",
 ]
 
 [project.scripts]

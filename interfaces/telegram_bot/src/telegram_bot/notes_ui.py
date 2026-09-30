@@ -11,6 +11,7 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 
 from notes.domain.items import Capture, Item
 from notes.domain.sections import Section
+from notes.enrich.providers import is_social_media
 from shared.config import settings
 from shared.obs import get_logger
 
@@ -45,7 +46,7 @@ def sections_line(sections: tuple[Section, ...]) -> str:
 
 
 def title_of(item: Item) -> str:
-    text = item.title or item.url or item.text
+    text = item.title or item.url or item.file_name or item.text or "Файл"
     return escape(text if len(text) <= TITLE_LIMIT else text[: TITLE_LIMIT - 1] + "…")
 
 
@@ -80,7 +81,7 @@ def item_keyboard(item: Item) -> InlineKeyboardMarkup | None:
     if base.startswith("https://"):
         url = f"{base}/?item={item.id}"
         row.append(InlineKeyboardButton(text=OPEN_LABEL, web_app=WebAppInfo(url=url)))
-    if item.kind == "link" and item.url:
+    if item.kind == "link" and item.url and not is_social_media(item.url):
         row.append(
             InlineKeyboardButton(
                 text=OFFER_LABEL, callback_data=NotesCB(action="offer", item_id=item.id).pack()

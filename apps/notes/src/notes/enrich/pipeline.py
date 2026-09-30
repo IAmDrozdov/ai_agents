@@ -8,6 +8,7 @@ from datetime import datetime
 
 from notes.classify.port import (
     Classifier,
+    ClassifierError,
     ClassifierRefused,
     ClassifierRejected,
     ClassifierUnavailable,
@@ -19,7 +20,7 @@ from notes.db import Database
 from notes.domain import items, sections
 from notes.domain.items import Item
 from notes.enrich.http import FetchError, HttpClient
-from notes.enrich.providers import Fetched, bare_host, fetch_for
+from notes.enrich.providers import Fetched, bare_host, fetch_for, is_youtube, youtube
 from shared.obs import get_logger
 
 log = get_logger(__name__)
@@ -29,11 +30,17 @@ Notify = Callable[[Item], Awaitable[None]]
 
 
 def build_request(
-    item: Item, fetched: Fetched | None, known: list[sections.Section]
+    item: Item,
+    fetched: Fetched | None,
+    known: list[sections.Section],
+    image: tuple[bytes, str] | None = None,
 ) -> FilingRequest:
     return FilingRequest(
         kind=item.kind,
         url=item.url,
+        file_name=item.file_name,
+        image=image[0] if image else None,
+        image_mime=image[1] if image else None,
         source=fetched.source if fetched else None,
         title=fetched.title if fetched else None,
         author=fetched.author if fetched else None,
@@ -41,6 +48,34 @@ def build_request(
         annotation=item.text,
         sections=[SectionBrief(slug=s.slug, name=s.name, hint=s.hint) for s in known],
     )
+
+
+async def load_image(http: HttpClient, image_url: str | None) -> tuple[bytes, str] | None:
+    """The cover image for vision, best effort: a missing or unreadable one just means no picture."""
+    if not image_url or not image_url.lower().startswith(("http://", "https://")):
+        return None
+    try:
+        return await http.get_image(image_url)
+    except FetchError as exc:
+        log.info("no cover image from %s: %s", image_url, exc)
+        return None
+
+
+async def file_with_fallback(
+    classifier: Classifier, request: FilingRequest, http: HttpClient
+) -> Filing:
+    """Classify; if the model is unsure about a YouTube video, ask once more with its captions."""
+    filing = await classifier.file(request)
+    if filing.confident or not request.url or not is_youtube(request.url):
+        return filing
+    text = await youtube.transcript(request.url, http)
+    if not text:
+        return filing
+    try:
+        return await classifier.file(request.model_copy(update={"transcript": text}))
+    except ClassifierError as exc:
+        log.info("transcript pass failed, keeping the first filing: %s", exc)
+        return filing
 
 
 async def enrich_item(
@@ -70,10 +105,15 @@ async def enrich_item(
             log.exception("item %s: fetching %s failed unexpectedly", item.id, item.url)
             fetched = Fetched(source=bare_host(item.url))
 
+    image: tuple[bytes, str] | None = None
+    if item.kind == "file":
+        image = await asyncio.to_thread(items.get_preview, db, item.id)
+    elif fetched is not None:
+        image = await load_image(http, fetched.image_url)
     known = await asyncio.to_thread(sections.list_sections, db)
-    request = build_request(item, fetched, known)
+    request = build_request(item, fetched, known, image)
     try:
-        filing = await classifier.file(request)
+        filing = await file_with_fallback(classifier, request, http)
     except ClassifierRefused as exc:
         log.warning("item %s: classifier refused: %s", item.id, exc)
         updated = await _store_async(db, item, fetched, None, f"refused: {exc}", now)

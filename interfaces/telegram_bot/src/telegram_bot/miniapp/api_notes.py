@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import asdict
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, ConfigDict, Field
 
 from notes.db import Database
@@ -129,6 +129,17 @@ def get_items(
 @router.get("/items/{item_id}")
 def get_item(item_id: int, db: DbDep) -> dict[str, Any]:
     return asdict(_found(items.get_item(db, item_id)))
+
+
+@router.get("/items/{item_id}/preview")
+def get_item_preview(item_id: int, db: DbDep) -> Response:
+    preview = items.get_preview(db, item_id)
+    if preview is None:
+        raise HTTPException(status_code=404, detail="No preview")
+    data, mime = preview
+    return Response(
+        content=data, media_type=mime, headers={"Cache-Control": "private, max-age=3600"}
+    )
 
 
 @router.post("/items/{item_id}/reenrich")

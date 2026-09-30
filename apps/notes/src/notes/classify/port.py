@@ -7,6 +7,7 @@ from typing import Literal, Protocol
 from pydantic import BaseModel, Field
 
 CAPTION_LIMIT = 2000
+TRANSCRIPT_LIMIT = 3000
 
 
 class SectionBrief(BaseModel):
@@ -16,19 +17,26 @@ class SectionBrief(BaseModel):
 
 
 class FilingRequest(BaseModel):
-    kind: Literal["link", "note"]
+    kind: Literal["link", "note", "file"]
     url: str | None = None
+    file_name: str | None = None
     source: str | None = None
     title: str | None = None
     author: str | None = None
     caption: str | None = None
     annotation: str = ""
+    transcript: str | None = None
+    image: bytes | None = Field(default=None, exclude=True)
+    image_mime: str | None = Field(default=None, exclude=True)
     sections: list[SectionBrief]
 
     def clipped_caption(self) -> str | None:
         if self.caption is None:
             return None
         return self.caption[:CAPTION_LIMIT]
+
+    def clipped_transcript(self) -> str | None:
+        return self.transcript[:TRANSCRIPT_LIMIT] if self.transcript else None
 
 
 class Filing(BaseModel):
@@ -37,6 +45,7 @@ class Filing(BaseModel):
     title: str | None = None
     author: str | None = None
     source: str | None = None
+    confident: bool = True
 
 
 class ClassifierError(Exception):

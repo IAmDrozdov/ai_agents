@@ -10,6 +10,7 @@ from notes.classify.port import FilingRequest, SectionBrief
 from notes.domain.sections import STARTER_SECTIONS
 from notes.domain.urls import extract_urls
 from notes.enrich.http import AiohttpClient, FetchError
+from notes.enrich.pipeline import file_with_fallback, load_image
 from notes.enrich.providers import Fetched, fetch_for
 from shared.config import settings
 
@@ -17,18 +18,22 @@ from shared.config import settings
 async def _smoke(text: str) -> int:
     extracted = extract_urls(text)
     url = extracted.urls[0] if extracted.urls else None
+    http = AiohttpClient()
     fetched: Fetched | None = None
     if url:
         try:
-            fetched = await fetch_for(url, AiohttpClient())
+            fetched = await fetch_for(url, http)
         except FetchError as exc:
             print(f"fetch failed: {exc.__class__.__name__}: {exc}")
             return 1
         for field in ("source", "title", "author", "image_url", "caption"):
             print(f"{field:>9}: {getattr(fetched, field)}")
+    image = await load_image(http, fetched.image_url) if fetched else None
     request = FilingRequest(
         kind="link" if url else "note",
         url=url,
+        image=image[0] if image else None,
+        image_mime=image[1] if image else None,
         source=fetched.source if fetched else None,
         title=fetched.title if fetched else None,
         author=fetched.author if fetched else None,
@@ -36,8 +41,9 @@ async def _smoke(text: str) -> int:
         annotation=extracted.annotation,
         sections=[SectionBrief(slug=s[0], name=s[1], hint=s[4]) for s in STARTER_SECTIONS],
     )
-    filing = await make_classifier(settings).file(request)
+    filing = await file_with_fallback(make_classifier(settings), request, http)
     print(f"   filing: {filing.sections or ['other']} ({settings.notes_classifier_provider})")
+    print(f"    image: {'yes' if image else 'no'} · confident: {filing.confident}")
     print(f"    title: {filing.title}")
     print(f"     gist: {filing.gist}")
     return 0
