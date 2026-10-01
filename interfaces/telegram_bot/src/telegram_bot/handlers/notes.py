@@ -11,7 +11,7 @@ from typing import Any
 
 import aiohttp
 from aiogram import Bot, F, Router
-from aiogram.exceptions import TelegramBadRequest
+from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
 from aiogram.types import CallbackQuery, Message
 
 from notes.classify import make_classifier
@@ -23,6 +23,7 @@ from notes.domain.urls import extract_urls
 from notes.enrich.http import AiohttpClient, HttpClient
 from notes.enrich.pipeline import enrich_item
 from notes.enrich.providers import is_social_media, is_youtube
+from notes.enrich.voice import Download, VoiceRejected, VoiceUnavailable
 from notes.sweeper import run_sweeper
 from shared.config import settings
 from shared.obs import get_logger
@@ -39,6 +40,7 @@ from .documents import (
     is_agent_document,
     offer_link,
     restore_draft,
+    sender_of,
     take_draft,
 )
 
@@ -47,6 +49,9 @@ log = get_logger(__name__)
 router = Router(name="notes")
 
 PREVIEW_MAX_BYTES = 300_000
+# The Bot API refuses getFile above this; a longer Voice cannot be transcribed.
+TELEGRAM_DOWNLOAD_MAX = 20 * 1024 * 1024
+SHOW_POLL_S = 2
 
 
 def is_direct_host(url: str) -> bool:
@@ -75,8 +80,22 @@ class NotesRuntime:
                 classifier=self.classifier,
                 notify=lambda item: notes_ui.edit_acknowledgement(bot, item),
                 interval_s=max(settings.notes_enrich_sweep_seconds, 5),
+                download=telegram_download(bot),
             )
         )
+
+    def start_show_loop(self, bot: Bot) -> None:
+        self.spawn(self._show_loop(bot))
+
+    async def _show_loop(self, bot: Bot) -> None:
+        """Serve the Mini App's "Показать в чате" requests; the database is the queue (ADR-0008)."""
+        while True:
+            try:
+                for item in await asyncio.to_thread(items.claim_show_requests, self.db):
+                    await notes_ui.show_in_chat(bot, item)
+            except Exception:
+                log.exception("notes: show-in-chat pass failed; will try again")
+            await asyncio.sleep(SHOW_POLL_S)
 
     def enrich_later(self, bot: Bot, item_id: int) -> None:
         self.spawn(
@@ -86,8 +105,34 @@ class NotesRuntime:
                 http=self.http,
                 classifier=self.classifier,
                 notify=lambda item: notes_ui.edit_acknowledgement(bot, item),
+                download=telegram_download(bot),
             )
         )
+
+
+def telegram_download(bot: Bot) -> Download:
+    """A Voice's bytes from Telegram, failures sorted into retry-later and give-up."""
+
+    async def download(file_id: str) -> bytes:
+        try:
+            file = await bot.get_file(file_id)
+            if (file.file_size or 0) > TELEGRAM_DOWNLOAD_MAX:
+                raise VoiceRejected("over Telegram's 20 MB download limit")
+            if not file.file_path:
+                raise VoiceRejected("Telegram gave no file path")
+            buffer = io.BytesIO()
+            await bot.download_file(file.file_path, destination=buffer)
+        except TelegramBadRequest as exc:  # "file is too big", a dead file_id
+            raise VoiceRejected(str(exc)) from exc
+        except TelegramAPIError as exc:
+            raise VoiceUnavailable(str(exc)) from exc
+        except aiohttp.ClientError as exc:  # its text embeds the download URL, which has the token
+            raise VoiceUnavailable(f"download failed: {exc.__class__.__name__}") from None
+        except TimeoutError:
+            raise VoiceUnavailable("download timed out") from None
+        return buffer.getvalue()
+
+    return download
 
 
 def build_runtime() -> NotesRuntime:
@@ -102,12 +147,23 @@ async def _save(card: Message, draft: Draft, bot: Bot, notes: NotesRuntime) -> N
     captured: list[tuple[Item, str | None]] = []
     if not extracted.urls:
         note = await asyncio.to_thread(
-            items.capture_note, notes.db, extracted.annotation, chat_id=card.chat.id
+            items.capture_note,
+            notes.db,
+            extracted.annotation,
+            sender=draft.sender,
+            chat_id=card.chat.id,
+            message_id=draft.message_id,
         )
         captured.append((note, None))
     for url in extracted.urls:
         capture = await asyncio.to_thread(
-            items.capture_link, notes.db, url, extracted.annotation, chat_id=card.chat.id
+            items.capture_link,
+            notes.db,
+            url,
+            extracted.annotation,
+            sender=draft.sender,
+            chat_id=card.chat.id,
+            message_id=draft.message_id,
         )
         is_new = capture.outcome == "new"
         captured.append((capture.item, None if is_new else notes_ui.duplicate(capture)))
@@ -237,11 +293,67 @@ async def file_handler(message: Message, bot: Bot, notes: NotesRuntime | None) -
             file_size=size,
             annotation=body_of(message),
             preview=preview,
+            sender=sender_of(message),
             chat_id=card.chat.id,
+            message_id=message.message_id,
         )
         await _acknowledge(card, [(item, None)], bot, notes)
     except Exception:
         log.exception("notes: saving a file failed")
+        await card.edit_text("⚠️ Не удалось сохранить — пришли ещё раз.")
+
+
+def _is_admin_voice(message: Message) -> bool:
+    """The admin's voice message or round video message: saved as a Voice and transcribed."""
+    user = message.from_user
+    if user is None or not is_admin(user.id):
+        return False
+    return message.voice is not None or message.video_note is not None
+
+
+@router.message(_is_admin_voice)
+async def voice_handler(message: Message, bot: Bot, notes: NotesRuntime | None) -> None:
+    """Admin: a voice or round video message becomes a Voice; Enrichment transcribes it."""
+    if notes is None:
+        await message.answer("Notes are unavailable right now.")
+        return
+    card = await message.answer("💾 Сохраняю…")
+    try:
+        if message.voice is not None:
+            voice = message.voice
+            file_id, mime, size, duration = (
+                voice.file_id,
+                voice.mime_type or "audio/ogg",
+                voice.file_size,
+                voice.duration,
+            )
+            preview = None
+        else:
+            round_video = message.video_note
+            assert round_video is not None
+            file_id, mime, size, duration = (
+                round_video.file_id,
+                "video/mp4",  # Telegram gives a video note no mime type; it is always mp4
+                round_video.file_size,
+                round_video.duration,
+            )
+            preview = await _download_preview(bot, round_video.thumbnail)
+        item = await asyncio.to_thread(
+            items.capture_voice,
+            notes.db,
+            file_id=file_id,
+            file_mime=mime,
+            file_size=size,
+            duration_s=duration,
+            annotation=body_of(message),
+            preview=preview,
+            sender=sender_of(message),
+            chat_id=card.chat.id,
+            message_id=message.message_id,
+        )
+        await _acknowledge(card, [(item, None)], bot, notes)
+    except Exception:
+        log.exception("notes: saving a voice failed")
         await card.edit_text("⚠️ Не удалось сохранить — пришли ещё раз.")
 
 

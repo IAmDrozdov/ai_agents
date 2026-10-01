@@ -43,7 +43,7 @@ only, plus `/start <invite>`. Routers then match in the order set in
 |---|---|---|
 | `start` | `/start`, `/help` (the admin's help adds a notes line) | everyone |
 | `admin` | `/invite`, `/users`, `/revoke` | admin |
-| `notes` | callbacks (`JobCB save`, `NotesCB`); messages: an Instagram / YouTube / TikTok link (`direct_link_handler`) and a photo, video or non-agent document (`file_handler`) are saved with no card (notes ADR-0007) | admin |
+| `notes` | callbacks (`JobCB save`, `NotesCB`); messages: an Instagram / YouTube / TikTok link (`direct_link_handler`), a photo, video or non-agent document (`file_handler`), and a voice or round video message (`voice_handler`, a Voice, transcribed in Enrichment) are saved with no card (notes ADR-0007, ADR-0008) | admin |
 | `documents` | an agent document (.pdf .docx .md .markdown .txt) → card; **admin** text or caption → card with 💾 (`admin_input_handler`); anyone else's text containing a URL → card (`link_handler`) | all |
 | `settings_menu`, `status` | `/settings`, `/status`, `/cancel` | all |
 
@@ -83,7 +83,9 @@ dedupe, or `capture_note`) → the card becomes the Acknowledgement → `enrich_
 `notes.enrich.pipeline.enrich_item`:
 
 1. The provider fetch runs through the SSRF guard: YouTube and TikTok oEmbed, the Instagram
-   captioned embed page, or a generic page.
+   captioned embed page, or a generic page. A Voice is downloaded from Telegram instead (the bot
+   passes `telegram_download` in, max 20 MB) and transcribed by `shared.audio.transcribe`; the
+   Transcript is stored at once, so a Classifier retry does not pay for STT again.
 2. The Classifier (`NOTES_CLASSIFIER_PROVIDER`: `openai`, or `fake` offline) chooses the
    Sections, the Russian Gist and the title.
 3. `store_enrichment` saves the result, and `notify` edits the Acknowledgement.
@@ -91,7 +93,7 @@ dedupe, or `capture_note`) → the card becomes the Acknowledgement → `enrich_
 Failures go to `schedule_retry` (backoff 1 min → 12 h, then `failed`). The sweeper
 (`NOTES_ENRICH_SWEEP_SECONDS`) retries anything due and anything a restart interrupted. On a
 saved link, 🤖 runs `documents.offer_link` again. `apps/*` never imports aiogram: the bot
-passes `notify` in as a callback. If notes fails to start, the bot runs without it and 💾
+passes `notify` and `download` in as callbacks. If notes fails to start, the bot runs without it and 💾
 answers "Notes are unavailable".
 
 Language: the bot UI is English; notes texts and the Mini App are Russian.
@@ -104,7 +106,9 @@ a `✏️ Открыть` button (`notes_ui.item_keyboard`, a `web_app` button w
 the `miniapp` service through the funnel sidecar: a static shell (`miniapp/static`, vanilla JS)
 that calls `/api/usage` and `/api/notes/*`. The Заметки tab filters, pages, edits an item
 (Sections, Status, Placement, Annotation, Reviewed), re-enriches, deletes a trashed one, and runs
-the bulk actions. The Секции tab creates, edits, reorders and deletes Sections. Enrichment never
+the bulk actions. "💬 Показать в чате" sets `show_requested_at` and closes the app; the bot's show
+loop (`NotesRuntime.start_show_loop`, every 2 s) replies to the Item's original message, or sends
+the file again by `file_id` if that message is gone (notes ADR-0008). The Секции tab creates, edits, reorders and deletes Sections. Enrichment never
 overwrites the Sections of an Item the Owner has already reviewed.
 
 Every `/api` call carries `Authorization: tma <initData>`. `miniapp/auth.py` checks Telegram's

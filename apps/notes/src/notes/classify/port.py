@@ -8,6 +8,8 @@ from pydantic import BaseModel, Field
 
 CAPTION_LIMIT = 2000
 TRANSCRIPT_LIMIT = 3000
+# A Voice's Transcript is the whole Item, so the Classifier sees far more of it.
+VOICE_TRANSCRIPT_LIMIT = 12000
 
 
 class SectionBrief(BaseModel):
@@ -17,7 +19,7 @@ class SectionBrief(BaseModel):
 
 
 class FilingRequest(BaseModel):
-    kind: Literal["link", "note", "file"]
+    kind: Literal["link", "note", "file", "voice"]
     url: str | None = None
     file_name: str | None = None
     source: str | None = None
@@ -25,6 +27,7 @@ class FilingRequest(BaseModel):
     author: str | None = None
     caption: str | None = None
     annotation: str = ""
+    sender: str | None = None
     transcript: str | None = None
     image: bytes | None = Field(default=None, exclude=True)
     image_mime: str | None = Field(default=None, exclude=True)
@@ -36,7 +39,8 @@ class FilingRequest(BaseModel):
         return self.caption[:CAPTION_LIMIT]
 
     def clipped_transcript(self) -> str | None:
-        return self.transcript[:TRANSCRIPT_LIMIT] if self.transcript else None
+        limit = VOICE_TRANSCRIPT_LIMIT if self.kind == "voice" else TRANSCRIPT_LIMIT
+        return self.transcript[:limit] if self.transcript else None
 
 
 class Filing(BaseModel):

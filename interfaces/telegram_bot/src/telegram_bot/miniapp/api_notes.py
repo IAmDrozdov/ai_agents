@@ -153,6 +153,15 @@ def reenrich(item_id: int, db: DbDep) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail="Item not found") from exc
 
 
+@router.post("/items/{item_id}/show")
+def show_in_chat(item_id: int, db: DbDep) -> dict[str, Any]:
+    """Queue "Показать в чате": the bot's show loop replies to the original message (ADR-0008)."""
+    item = _found(items.get_item(db, item_id))
+    if item.tg_chat_id is None or item.tg_message_id is None:
+        raise HTTPException(status_code=409, detail="No original message to show")
+    return asdict(_found(items.request_show(db, item_id)))
+
+
 @router.patch("/items/{item_id}")
 def patch_item(item_id: int, patch: ItemPatch, db: DbDep) -> dict[str, Any]:
     item = items.edit_item(

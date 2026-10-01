@@ -13,4 +13,4 @@
 - [x] Migration: an old-schema DB keeps its Items and Sections and accepts `kind='file'`; running `init` twice is a no-op
 - [x] `notes-smoke` on YouTube sends the cover image (`image: yes`); captions fetch works
 - [x] 11 Instagram links and 2 YouTube videos from the owner's Saved Messages through `notes-smoke`: Sections fit; a vague reel ("wishlist") became mugs → Buy only once the cover reached the model. A vague YouTube video (second pass with captions) not met yet
-- [ ] Deployed; the Mini App shows a photo preview and file name
+- [x] Deployed; the Mini App shows a photo preview and file name (previews were blocked by the CSP until `img-src blob:` on 2026-10-01)

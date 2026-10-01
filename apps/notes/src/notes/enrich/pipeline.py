@@ -21,6 +21,7 @@ from notes.domain import items, sections
 from notes.domain.items import Item
 from notes.enrich.http import FetchError, HttpClient
 from notes.enrich.providers import Fetched, bare_host, fetch_for, is_youtube, youtube
+from notes.enrich.voice import Download, VoiceRejected, VoiceUnavailable, transcript_for
 from shared.obs import get_logger
 
 log = get_logger(__name__)
@@ -34,6 +35,7 @@ def build_request(
     fetched: Fetched | None,
     known: list[sections.Section],
     image: tuple[bytes, str] | None = None,
+    transcript: str | None = None,
 ) -> FilingRequest:
     return FilingRequest(
         kind=item.kind,
@@ -46,6 +48,8 @@ def build_request(
         author=fetched.author if fetched else None,
         caption=fetched.caption if fetched else None,
         annotation=item.text,
+        sender=item.sender,
+        transcript=transcript,
         sections=[SectionBrief(slug=s.slug, name=s.name, hint=s.hint) for s in known],
     )
 
@@ -78,6 +82,11 @@ async def file_with_fallback(
         return filing
 
 
+# Item ids being enriched in this process: a slow Voice can outlive STALE_PENDING, and the
+# sweeper must not start it a second time and pay for STT twice.
+_in_flight: set[int] = set()
+
+
 async def enrich_item(
     db: Database,
     item_id: int,
@@ -85,7 +94,29 @@ async def enrich_item(
     http: HttpClient,
     classifier: Classifier,
     notify: Notify | None,
+    download: Download | None = None,
     now: datetime | None = None,
+) -> None:
+    if item_id in _in_flight:
+        return
+    _in_flight.add(item_id)
+    try:
+        await _enrich_item(
+            db, item_id, http=http, classifier=classifier, notify=notify, download=download, now=now
+        )
+    finally:
+        _in_flight.discard(item_id)
+
+
+async def _enrich_item(
+    db: Database,
+    item_id: int,
+    *,
+    http: HttpClient,
+    classifier: Classifier,
+    notify: Notify | None,
+    download: Download | None,
+    now: datetime | None,
 ) -> None:
     item = await asyncio.to_thread(items.get_item, db, item_id)
     if item is None or item.enrichment_status != "pending":
@@ -105,13 +136,38 @@ async def enrich_item(
             log.exception("item %s: fetching %s failed unexpectedly", item.id, item.url)
             fetched = Fetched(source=bare_host(item.url))
 
+    transcript = item.transcript
+    if item.kind == "voice" and transcript is None:
+        if download is None:
+            log.info("item %s: no download wired in, Voice left pending", item.id)
+            return
+        try:
+            transcript = await transcript_for(item, download)
+            await asyncio.to_thread(items.store_transcript, db, item.id, transcript)
+        except VoiceRejected as exc:
+            log.warning("item %s: cannot transcribe: %s", item.id, exc)
+            await _record_failure(items.mark_failed, db, item.id, str(exc), now, notify)
+            return
+        except VoiceUnavailable as exc:
+            log.warning("item %s: transcription unavailable, will retry: %s", item.id, exc)
+            await _record_failure(items.schedule_retry, db, item.id, str(exc), now, notify)
+            return
+        except KeyError:
+            log.info("item %s was deleted while it was being transcribed", item.id)
+            return
+        except Exception as exc:
+            log.exception("item %s: transcription failed, will retry", item.id)
+            error = str(exc) or exc.__class__.__name__
+            await _record_failure(items.schedule_retry, db, item.id, error, now, notify)
+            return
+
     image: tuple[bytes, str] | None = None
-    if item.kind == "file":
+    if item.kind in ("file", "voice"):
         image = await asyncio.to_thread(items.get_preview, db, item.id)
     elif fetched is not None:
         image = await load_image(http, fetched.image_url)
     known = await asyncio.to_thread(sections.list_sections, db)
-    request = build_request(item, fetched, known, image)
+    request = build_request(item, fetched, known, image, transcript)
     try:
         filing = await file_with_fallback(classifier, request, http)
     except ClassifierRefused as exc:
@@ -119,15 +175,15 @@ async def enrich_item(
         updated = await _store_async(db, item, fetched, None, f"refused: {exc}", now)
     except ClassifierRejected as exc:
         log.error("item %s: classifier rejected the request: %s", item.id, exc)
-        await _record_failure(items.mark_failed, db, item.id, str(exc), now)
+        await _record_failure(items.mark_failed, db, item.id, str(exc), now, notify)
         return
     except ClassifierUnavailable as exc:
         log.warning("item %s: classifier unavailable, will retry: %s", item.id, exc)
-        await _record_failure(items.schedule_retry, db, item.id, str(exc), now)
+        await _record_failure(items.schedule_retry, db, item.id, str(exc), now, notify)
         return
     except Exception as exc:
         log.exception("item %s: enrichment failed, will retry", item.id)
-        await _record_failure(items.schedule_retry, db, item.id, str(exc), now)
+        await _record_failure(items.schedule_retry, db, item.id, str(exc), now, notify)
         return
     else:
         updated = await _store_async(db, item, fetched, filing, fetch_error, now)
@@ -136,12 +192,21 @@ async def enrich_item(
 
 
 async def _record_failure(
-    record: Callable[..., Item], db: Database, item_id: int, error: str, now: datetime | None
+    record: Callable[..., Item],
+    db: Database,
+    item_id: int,
+    error: str,
+    now: datetime | None,
+    notify: Notify | None,
 ) -> None:
+    """Record a failure; once it is final, tell the interface so the Acknowledgement stops waiting."""
     try:
-        await asyncio.to_thread(record, db, item_id, error, now=now)
+        updated = await asyncio.to_thread(record, db, item_id, error, now=now)
     except KeyError:  # the Owner deleted it meanwhile
         log.info("item %s was deleted while it was being enriched", item_id)
+        return
+    if updated.enrichment_status == "failed" and notify is not None:
+        await notify(updated)
 
 
 async def _store_async(

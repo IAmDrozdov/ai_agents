@@ -19,7 +19,7 @@ HERE = Path(__file__).parent
 
 CSP = (
     "default-src 'self'; script-src 'self' https://telegram.org; style-src 'self'; "
-    "img-src 'self' https: data:; connect-src 'self'; frame-ancestors https://web.telegram.org; "
+    "img-src 'self' https: data: blob:; connect-src 'self'; frame-ancestors https://web.telegram.org; "
     "base-uri 'none'; form-action 'none'"
 )
 

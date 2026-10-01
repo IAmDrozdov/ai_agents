@@ -120,29 +120,9 @@ $G ssh "$C exec -T bot notes-smoke https://youtu.be/dQw4w9WgXcQ"
 ## 5. Telegram Web (the real chat), then the owner
 
 Only production polls the bot token, so the real chat is the only place to exercise the menu
-button, cards and `web_app` buttons. Drive the owner's logged-in Telegram Web through the
-`chrome-devtools` MCP (`--autoConnect`: Chrome open, remote debugging on at
-`chrome://inspect/#remote-debugging`). Which Chrome profile and which chat URL are machine facts
-in `CLAUDE.local.md` (gitignored, because this repo is public).
-
-- `list_pages` also lists the work profile's tabs: never select, read or navigate a tab that is not
-  Telegram, this app or the local dev server. A login QR means the wrong profile: stop and ask.
-- Use clearly labelled test content (`🧪 …`), never tap Run on an agent card, and delete every
-  test item afterwards. Note the Items total and Section counts first, and check them at the end.
-- The Mini App opens in an iframe modal, and `take_snapshot` exposes the app's own controls inside
-  it, so click and fill there. Telegram's buttons ignore a synthetic `.click()`: use the tool's
-  `click` with a uid from a snapshot. Save snapshots to a file and grep them (a bare `wait_for` or
-  `take_snapshot` on the Telegram tab dumps the whole chat list), and delete the file afterwards.
-  To drive the app top-level instead, read the iframe `src` for the real `tgWebAppData` hash and
-  open it in a new tab. That value is an admin credential for 24 h: keep it in the scratchpad,
-  never print or commit it.
-- If the browser's machine is on the same tailnet as the Funnel node, MagicDNS resolves the app's
-  name to a private tailnet address, and Chrome holds the frame of a public page (Telegram Web) that
-  points there. The app itself is fine: phones and Telegram Desktop are unaffected. To test in
-  that Chrome, run `tailscale set --accept-dns=false`, wait a minute for Chrome's DNS cache, and
-  put `--accept-dns=true` back afterwards.
-- Telegram Web remembers a collapsed mini-app window: expand it with the modal's expand button, or
-  reload the tab.
-
-Native webviews differ from Telegram Web, so finish with a two-minute list for the owner's phone:
-what to tap and what should appear.
+button, cards and `web_app` buttons. Every change the owner sees in Telegram ends here, run by the
+`live-test` skill (`.claude/skills/live-test/`): a script the owner approves first, then a run in
+the owner's logged-in Telegram Web through the `chrome-devtools` MCP. The skill's `telegram-web.md`
+holds the guardrails and mechanics; which Chrome profile and which chat URL are machine facts in
+`CLAUDE.local.md` (gitignored, because this repo is public). The agent runs every case itself;
+voice and round-video messages come from the skill's `send_media.py`.

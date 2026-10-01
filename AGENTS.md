@@ -24,6 +24,7 @@ Monorepo of local AI workflows exposed through one job contract (`shared.job`, A
 - New ADR -> `docs/decisions/NNN-title.md`
 - Deploy bot to droplet -> `.claude/skills/deploy-bot/SKILL.md` (slash: `/deploy-bot`)
 - Change the bot's routing, cards or buttons -> `docs/runtime.md` (routing table, card lifecycle), then `docs/verifying.md` §3
+- Live test in the real chat (last rung, owner-approved script) -> `.claude/skills/live-test/SKILL.md` (slash: `/live-test`)
 - Add an env var or a service -> `docs/runtime.md` "Touch points"
 
 ## Hard layer rules (enforced by `tools/check_layers.py` + pre-commit)
@@ -52,6 +53,17 @@ Manual run: `uv run pre-commit run --all-files`.
 
 ## Stack (fixed)
 Py 3.12+, uv workspaces, Ruff, ty, Pydantic, LangChain (primary), LangGraph (justified), aiogram Telegram bot + FastAPI admin Mini App (notes and usage), sqlite, pre-commit.
+
+## Agent skills
+
+### Issue tracker
+Local markdown under `.scratch/<feature>/` (gitignored). See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+Five default roles (needs-triage, needs-info, ready-for-agent, ready-for-human, wontfix). See `docs/agents/triage-labels.md`.
+
+### Domain docs
+Single-context root `CONTEXT.md` + `apps/notes/CONTEXT.md`; ADRs in `docs/decisions/`. See `docs/agents/domain.md`.
 
 ## Workflows index
 `docs/workflows-index.md` (regen by create-workflow skill).

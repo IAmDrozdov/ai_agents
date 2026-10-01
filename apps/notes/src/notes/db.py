@@ -14,7 +14,7 @@ log = get_logger(__name__)
 ITEMS_DDL = """
 CREATE TABLE IF NOT EXISTS {name} (
     id                  INTEGER PRIMARY KEY AUTOINCREMENT,
-    kind                TEXT NOT NULL CHECK (kind IN ('link', 'note', 'file')),
+    kind                TEXT NOT NULL CHECK (kind IN ('link', 'note', 'file', 'voice')),
     url                 TEXT,
     url_normalized      TEXT,
     text                TEXT NOT NULL DEFAULT '',
@@ -28,7 +28,10 @@ CREATE TABLE IF NOT EXISTS {name} (
     file_name           TEXT,
     file_mime           TEXT,
     file_size           INTEGER,
-    status              TEXT NOT NULL DEFAULT 'new'
+    duration_s          INTEGER,
+    transcript          TEXT,
+    sender              TEXT,
+    status             TEXT NOT NULL DEFAULT 'new'
                         CHECK (status IN ('new', 'started', 'done')),
     placement           TEXT NOT NULL DEFAULT 'active'
                         CHECK (placement IN ('active', 'archived', 'trashed')),
@@ -40,6 +43,8 @@ CREATE TABLE IF NOT EXISTS {name} (
     next_enrich_at      TEXT,
     tg_chat_id          INTEGER,
     tg_ack_message_id   INTEGER,
+    tg_message_id       INTEGER,
+    show_requested_at   TEXT,
     created_at          TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at          TEXT NOT NULL DEFAULT (datetime('now')),
     trashed_at          TEXT
@@ -63,6 +68,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS items_url_normalized
     ON items(url_normalized) WHERE url_normalized IS NOT NULL;
 CREATE INDEX IF NOT EXISTS items_placement_status ON items(placement, status, created_at DESC);
 CREATE INDEX IF NOT EXISTS items_enrich ON items(enrichment_status, next_enrich_at);
+CREATE INDEX IF NOT EXISTS items_show
+    ON items(show_requested_at) WHERE show_requested_at IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS item_previews (
     item_id INTEGER PRIMARY KEY REFERENCES items(id) ON DELETE CASCADE,
@@ -83,8 +90,8 @@ def _items_sql(conn: sqlite3.Connection) -> str:
     return row["sql"] if row else ""
 
 
-def _migrate_items_to_files(conn: sqlite3.Connection) -> None:
-    """Rebuild `items` so `kind` accepts 'file' (SQLite cannot alter a CHECK); keeps ids and Sections."""
+def _rebuild_items(conn: sqlite3.Connection) -> None:
+    """Rebuild `items` to the current DDL (SQLite cannot alter a CHECK); keeps ids and Sections."""
     columns = ", ".join(r["name"] for r in conn.execute("PRAGMA table_info(items)"))
     conn.commit()
     conn.execute("PRAGMA foreign_keys=OFF")  # a no-op inside a transaction; DROP must not cascade
@@ -103,7 +110,7 @@ def _migrate_items_to_files(conn: sqlite3.Connection) -> None:
     finally:
         conn.execute("PRAGMA foreign_keys=ON")
     conn.executescript(SCHEMA)  # the rebuild dropped the indexes
-    log.info("notes db: rebuilt items to accept kind 'file'")
+    log.info("notes db: rebuilt items to the current schema")
 
 
 class Database:
@@ -139,7 +146,8 @@ class Database:
         Path(self.path).parent.mkdir(parents=True, exist_ok=True)
         with self.session() as conn:
             conn.execute("PRAGMA journal_mode=WAL")
-            conn.executescript(ITEMS_DDL.format(name="items") + SCHEMA)
-            if "'file'" not in _items_sql(conn):
-                _migrate_items_to_files(conn)
+            conn.executescript(ITEMS_DDL.format(name="items"))
+            if "'voice'" not in _items_sql(conn):
+                _rebuild_items(conn)
+            conn.executescript(SCHEMA)
         seed_sections(self)

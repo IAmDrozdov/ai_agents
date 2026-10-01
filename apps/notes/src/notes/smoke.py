@@ -1,9 +1,10 @@
-"""`uv run notes-smoke <url-or-text>`: fetch and file one input, print what came back (ADR-001)."""
+"""`uv run notes-smoke <url-or-text | --voice FILE>`: file one input, print what came back (ADR-001)."""
 
 from __future__ import annotations
 
 import argparse
 import asyncio
+from pathlib import Path
 
 from notes.classify import make_classifier
 from notes.classify.port import FilingRequest, SectionBrief
@@ -12,7 +13,10 @@ from notes.domain.urls import extract_urls
 from notes.enrich.http import AiohttpClient, FetchError
 from notes.enrich.pipeline import file_with_fallback, load_image
 from notes.enrich.providers import Fetched, fetch_for
+from shared.audio import SttSpec, transcribe
 from shared.config import settings
+
+TRANSCRIPT_HEAD = 400
 
 
 async def _smoke(text: str) -> int:
@@ -41,6 +45,25 @@ async def _smoke(text: str) -> int:
         annotation=extracted.annotation,
         sections=[SectionBrief(slug=s[0], name=s[1], hint=s[4]) for s in STARTER_SECTIONS],
     )
+    return await _file(request, http, image is not None)
+
+
+async def _smoke_voice(path: Path) -> int:
+    """Transcribe a local voice file the way Enrichment does, then file it as a Voice."""
+    result = await asyncio.to_thread(
+        transcribe, settings, path.read_bytes(), SttSpec(), duration_s=0, filename=path.name
+    )
+    head = result.text[:TRANSCRIPT_HEAD] + ("…" if len(result.text) > TRANSCRIPT_HEAD else "")
+    print(f"transcript: {len(result.text)} chars: {head}")
+    request = FilingRequest(
+        kind="voice",
+        transcript=result.text,
+        sections=[SectionBrief(slug=s[0], name=s[1], hint=s[4]) for s in STARTER_SECTIONS],
+    )
+    return await _file(request, AiohttpClient(), False)
+
+
+async def _file(request: FilingRequest, http: AiohttpClient, image: bool) -> int:
     filing = await file_with_fallback(make_classifier(settings), request, http)
     print(f"   filing: {filing.sections or ['other']} ({settings.notes_classifier_provider})")
     print(f"    image: {'yes' if image else 'no'} · confident: {filing.confident}")
@@ -51,8 +74,16 @@ async def _smoke(text: str) -> int:
 
 def main() -> None:
     parser = argparse.ArgumentParser(prog="notes-smoke", description=__doc__)
-    parser.add_argument("text", help="a link, or plain text for a Note")
-    raise SystemExit(asyncio.run(_smoke(parser.parse_args().text)))
+    parser.add_argument("text", nargs="?", help="a link, or plain text for a Note")
+    parser.add_argument(
+        "--voice", type=Path, help="an audio file (.ogg .m4a .mp3 .mp4) to file as a Voice"
+    )
+    args = parser.parse_args()
+    if args.voice is not None:
+        raise SystemExit(asyncio.run(_smoke_voice(args.voice)))
+    if not args.text:
+        parser.error("give a link, plain text, or --voice FILE")
+    raise SystemExit(asyncio.run(_smoke(args.text)))
 
 
 if __name__ == "__main__":

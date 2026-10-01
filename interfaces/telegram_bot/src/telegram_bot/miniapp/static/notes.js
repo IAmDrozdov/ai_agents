@@ -16,6 +16,7 @@ import {
   setBack,
   setText,
   slot,
+  tg,
   toast,
 } from "./core.js";
 
@@ -38,11 +39,21 @@ const STALE_AFTER_MS = 350;
 const HEAD_FIELDS = [
   "kind", "url", "title", "text", "source", "author", "gist", "file_name",
   "created_at", "enrichment_status", "enrichment_error", "caption",
+  "transcript", "sender", "duration_s", "tg_message_id",
 ]; // prettier-ignore
 
 const isHttp = (url) => /^https?:\/\//i.test(url || "");
-const itemTitle = (item) => item.title || item.url || item.file_name || item.text || "Без названия";
-const originOf = (item) => [item.source, item.author].filter(Boolean).join(" · ");
+const itemTitle = (item) =>
+  item.title || item.url || item.file_name || item.text || (item.kind === "voice" ? "🎤 Голосовое" : "Без названия");
+const originOf = (item) =>
+  [item.source, item.author, item.sender && "↪️ " + item.sender].filter(Boolean).join(" · ");
+const hasPreview = (item) =>
+  item.kind === "file" || (item.kind === "voice" && (item.file_mime || "").startsWith("video/"));
+
+function fmtDuration(seconds) {
+  const s = Math.max(0, Math.round(seconds || 0));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+}
 
 function fmtDate(ts) {
   const date = parseTs(ts);
@@ -83,7 +94,7 @@ function card(item, handlers) {
     img.referrerPolicy = "no-referrer";
     img.src = item.image_url;
     node.append(img);
-  } else if (item.kind === "file") {
+  } else if (hasPreview(item)) {
     const img = el("img", "thumb");
     img.alt = "";
     node.append(img);
@@ -100,6 +111,7 @@ function card(item, handlers) {
   const origin = originOf(item);
   if (origin) body.append(el("div", "origin", origin));
   if (item.kind === "file" && item.file_name) body.append(el("div", "origin", "📎 " + item.file_name));
+  if (item.kind === "voice") body.append(el("div", "origin", "🎤 " + fmtDuration(item.duration_s)));
   if (item.gist) body.append(el("div", "gist", item.gist));
   if (item.kind !== "note" && item.text) body.append(el("div", "annotation", "✍️ " + item.text));
 
@@ -661,12 +673,33 @@ export async function mountNotes(root, launch = {}) {
       retry.onclick = reenrich;
       nodes.push(retry);
     }
+    if (item.tg_message_id) {
+      const show = el("button", "btn small ghost", "💬 Показать в чате");
+      show.onclick = showInChat;
+      nodes.push(show);
+    }
+    if (item.kind === "voice") nodes.push(el("div", "hint", "🎤 " + fmtDuration(item.duration_s)));
+    if (item.transcript) {
+      const details = el("details", "caption");
+      details.open = true;
+      details.append(el("summary", null, "Расшифровка"), el("p", null, item.transcript));
+      nodes.push(details);
+    }
     if (item.caption) {
       const details = el("details", "caption");
       details.append(el("summary", null, "Описание"), el("p", null, item.caption));
       nodes.push(details);
     }
     return nodes;
+  }
+
+  // The bot replies to the original message within a couple of seconds; the app gets out of the way.
+  async function showInChat() {
+    if (state.busy) return;
+    const shown = await act(() => api(`/notes/items/${state.detail.id}/show`, { method: "POST" }));
+    if (!shown) return;
+    haptic("success");
+    tg.close();
   }
 
   function actionNodes(item) {

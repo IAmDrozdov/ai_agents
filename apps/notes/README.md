@@ -1,11 +1,11 @@
 # notes
 
-The admin's "save for later" store: links and text sent to the Telegram bot are saved at once,
-enriched (title, author, caption, thumbnail), filed into Sections with a Russian Gist, and sorted
+The admin's "save for later" store: links, text, files and voice messages sent to the Telegram bot
+are saved at once, enriched (title, author, caption, thumbnail, a voice's transcript), filed into Sections with a Russian Gist, and sorted
 in the admin Mini App (ADR-016). Merged in from the standalone `maxi-notes` repo (ADR-015).
 
 - Vocabulary: `CONTEXT.md` (separate from the repo glossary: **Source** means something else here)
-- Decisions: `docs/decisions/0001–0006` · Spec: `docs/spec.md` · Tickets: `docs/tickets/`
+- Decisions: `docs/decisions/0001–0008` · Spec: `docs/spec.md` · Tickets: `docs/tickets/`
 
 ## Layout
 
@@ -21,6 +21,7 @@ in the admin Mini App (ADR-016). Merged in from the standalone `maxi-notes` repo
 
 ```bash
 uv run notes-smoke https://youtu.be/dQw4w9WgXcQ   # fetch + file one input, print the result
+uv run notes-smoke --voice memo.ogg               # transcribe + file a voice file
 uv run notes-smoke http://169.254.169.254/         # the SSRF guard refuses it
 uv run telegram-bot                                # 💾 on the card for ADMIN_TELEGRAM_ID
 uv run telegram-miniapp                            # http://127.0.0.1:8083, opened from Telegram

@@ -14,7 +14,14 @@ from urllib.parse import urlparse
 
 import aiohttp
 from aiogram import Bot, F, Router
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import (
+    CallbackQuery,
+    Message,
+    MessageOriginChannel,
+    MessageOriginChat,
+    MessageOriginHiddenUser,
+    MessageOriginUser,
+)
 
 from shared.config import settings
 from shared.job import DocumentSource, Estimate, LinkSource, Preview, Source
@@ -149,10 +156,12 @@ def _remember_pending(chat_id: int, item: Pending) -> None:
 
 @dataclass(frozen=True)
 class Draft:
-    """What 💾 saves: the admin's own words, plus links hidden behind text."""
+    """What 💾 saves: the admin's own words, links hidden behind text, who forwarded it, from where."""
 
     text: str
     links: tuple[str, ...] = ()
+    sender: str | None = None
+    message_id: int | None = None
 
 
 # (chat id, card message id) → Draft, until saved, cancelled, run or evicted.
@@ -472,11 +481,30 @@ def body_of(message: Message) -> str:
     return (message.text or message.caption or "").strip()
 
 
+def sender_of(message: Message) -> str | None:
+    """Who a forwarded message came from: a person, a hidden user, a chat or a channel."""
+    origin = message.forward_origin
+    if isinstance(origin, MessageOriginUser):
+        return origin.sender_user.full_name
+    if isinstance(origin, MessageOriginHiddenUser):
+        return origin.sender_user_name
+    if isinstance(origin, MessageOriginChat):
+        return origin.sender_chat.title or origin.sender_chat.full_name
+    if isinstance(origin, MessageOriginChannel):
+        return origin.chat.title or origin.chat.full_name
+    return None
+
+
 def draft_of(message: Message) -> Draft:
     """The admin's words and the links hidden behind text in `message`."""
     entities = message.entities or message.caption_entities or []
     links = tuple(e.url for e in entities if e.type == "text_link" and e.url)
-    return Draft(text=body_of(message), links=links)
+    return Draft(
+        text=body_of(message),
+        links=links,
+        sender=sender_of(message),
+        message_id=message.message_id,
+    )
 
 
 def first_link(draft: Draft) -> str | None:

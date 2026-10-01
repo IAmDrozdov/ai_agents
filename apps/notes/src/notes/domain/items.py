@@ -1,4 +1,4 @@
-"""Items: Links, Notes and Files, their Filing, Status and Placement (ADR-0001..0003)."""
+"""Items: Links, Notes, Files and Voices, their Filing, Status and Placement (ADR-0001..0003)."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from notes.db import Database
 from notes.domain.sections import OTHER_SLUG, Section, _row_to_section, other_id
 from notes.domain.urls import normalize_url
 
-Kind = Literal["link", "note", "file"]
+Kind = Literal["link", "note", "file", "voice"]
 Status = Literal["new", "started", "done"]
 Placement = Literal["active", "archived", "trashed"]
 EnrichmentStatus = Literal["pending", "done", "failed", "skipped"]
@@ -46,6 +46,9 @@ class Item:
     file_name: str | None
     file_mime: str | None
     file_size: int | None
+    duration_s: int | None
+    transcript: str | None
+    sender: str | None
     status: Status
     placement: Placement
     reviewed: bool
@@ -55,6 +58,8 @@ class Item:
     next_enrich_at: str | None
     tg_chat_id: int | None
     tg_ack_message_id: int | None
+    tg_message_id: int | None
+    show_requested_at: str | None
     created_at: str
     updated_at: str
     trashed_at: str | None
@@ -116,6 +121,9 @@ def _row_to_item(conn: sqlite3.Connection, row: sqlite3.Row) -> Item:
         file_name=row["file_name"],
         file_mime=row["file_mime"],
         file_size=row["file_size"],
+        duration_s=row["duration_s"],
+        transcript=row["transcript"],
+        sender=row["sender"],
         status=row["status"],
         placement=row["placement"],
         reviewed=bool(row["reviewed"]),
@@ -125,6 +133,8 @@ def _row_to_item(conn: sqlite3.Connection, row: sqlite3.Row) -> Item:
         next_enrich_at=row["next_enrich_at"],
         tg_chat_id=row["tg_chat_id"],
         tg_ack_message_id=row["tg_ack_message_id"],
+        tg_message_id=row["tg_message_id"],
+        show_requested_at=row["show_requested_at"],
         created_at=row["created_at"],
         updated_at=row["updated_at"],
         trashed_at=row["trashed_at"],
@@ -140,14 +150,20 @@ def _fetch(conn: sqlite3.Connection, item_id: int) -> Item:
 
 
 def capture_note(
-    db: Database, text: str, *, chat_id: int | None = None, now: datetime | None = None
+    db: Database,
+    text: str,
+    *,
+    sender: str | None = None,
+    chat_id: int | None = None,
+    message_id: int | None = None,
+    now: datetime | None = None,
 ) -> Item:
     """Save a Note; it lands in Other until the Classifier files it (ADR-0006)."""
     with db.session() as conn:
         cur = conn.execute(
-            "INSERT INTO items(kind, text, tg_chat_id, created_at, updated_at) "
-            "VALUES ('note', ?, ?, ?, ?)",
-            (text, chat_id, stamp(now), stamp(now)),
+            "INSERT INTO items(kind, text, sender, tg_chat_id, tg_message_id, created_at, updated_at) "
+            "VALUES ('note', ?, ?, ?, ?, ?, ?)",
+            (text, sender, chat_id, message_id, stamp(now), stamp(now)),
         )
         item_id = int(cur.lastrowid or 0)
         conn.execute(
@@ -166,31 +182,88 @@ def capture_file(
     file_size: int | None,
     annotation: str,
     preview: tuple[bytes, str] | None,
+    sender: str | None = None,
     chat_id: int | None = None,
+    message_id: int | None = None,
     now: datetime | None = None,
 ) -> Item:
     """Save a File (photo, video, other document): Telegram keeps the bytes, we keep a preview."""
     with db.session() as conn:
         cur = conn.execute(
-            "INSERT INTO items(kind, text, file_id, file_name, file_mime, file_size, tg_chat_id, "
-            "created_at, updated_at) VALUES ('file', ?, ?, ?, ?, ?, ?, ?, ?)",
-            (annotation, file_id, file_name, file_mime, file_size, chat_id, stamp(now), stamp(now)),
+            "INSERT INTO items(kind, text, file_id, file_name, file_mime, file_size, sender, "
+            "tg_chat_id, tg_message_id, created_at, updated_at) "
+            "VALUES ('file', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                annotation,
+                file_id,
+                file_name,
+                file_mime,
+                file_size,
+                sender,
+                chat_id,
+                message_id,
+                stamp(now),
+                stamp(now),
+            ),
         )
         item_id = int(cur.lastrowid or 0)
-        conn.execute(
-            "INSERT INTO item_sections(item_id, section_id) VALUES (?, ?)",
-            (item_id, other_id(db)),
-        )
-        if preview is not None:
-            conn.execute(
-                "INSERT INTO item_previews(item_id, mime, data) VALUES (?, ?, ?)",
-                (item_id, preview[1], preview[0]),
-            )
+        _file_in_other(conn, db, item_id, preview)
         return _fetch(conn, item_id)
 
 
+def capture_voice(
+    db: Database,
+    *,
+    file_id: str,
+    file_mime: str | None,
+    file_size: int | None,
+    duration_s: int | None,
+    annotation: str,
+    preview: tuple[bytes, str] | None,
+    sender: str | None = None,
+    chat_id: int | None = None,
+    message_id: int | None = None,
+    now: datetime | None = None,
+) -> Item:
+    """Save a Voice (voice or round video message); Enrichment adds the Transcript."""
+    with db.session() as conn:
+        cur = conn.execute(
+            "INSERT INTO items(kind, text, file_id, file_mime, file_size, duration_s, sender, "
+            "tg_chat_id, tg_message_id, created_at, updated_at) "
+            "VALUES ('voice', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                annotation,
+                file_id,
+                file_mime,
+                file_size,
+                duration_s,
+                sender,
+                chat_id,
+                message_id,
+                stamp(now),
+                stamp(now),
+            ),
+        )
+        item_id = int(cur.lastrowid or 0)
+        _file_in_other(conn, db, item_id, preview)
+        return _fetch(conn, item_id)
+
+
+def _file_in_other(
+    conn: sqlite3.Connection, db: Database, item_id: int, preview: tuple[bytes, str] | None
+) -> None:
+    conn.execute(
+        "INSERT INTO item_sections(item_id, section_id) VALUES (?, ?)", (item_id, other_id(db))
+    )
+    if preview is not None:
+        conn.execute(
+            "INSERT INTO item_previews(item_id, mime, data) VALUES (?, ?, ?)",
+            (item_id, preview[1], preview[0]),
+        )
+
+
 def get_preview(db: Database, item_id: int) -> tuple[bytes, str] | None:
-    """The stored preview image of a File as (bytes, mime), or None."""
+    """The stored preview image of a File or Voice as (bytes, mime), or None."""
     with db.session(readonly=True) as conn:
         row = conn.execute(
             "SELECT data, mime FROM item_previews WHERE item_id=?", (item_id,)
@@ -203,7 +276,9 @@ def capture_link(
     url: str,
     annotation: str,
     *,
+    sender: str | None = None,
     chat_id: int | None = None,
+    message_id: int | None = None,
     now: datetime | None = None,
 ) -> Capture:
     """Save a Link once: a repeat returns the existing Item, restoring it if it was trashed."""
@@ -212,9 +287,9 @@ def capture_link(
         # OR IGNORE against the unique key makes a double-send race-free: the loser sees the row.
         cur = conn.execute(
             "INSERT OR IGNORE INTO items"
-            "(kind, url, url_normalized, text, tg_chat_id, created_at, updated_at) "
-            "VALUES ('link', ?, ?, ?, ?, ?, ?)",
-            (url, key, annotation, chat_id, stamp(now), stamp(now)),
+            "(kind, url, url_normalized, text, sender, tg_chat_id, tg_message_id, "
+            "created_at, updated_at) VALUES ('link', ?, ?, ?, ?, ?, ?, ?, ?)",
+            (url, key, annotation, sender, chat_id, message_id, stamp(now), stamp(now)),
         )
         if cur.rowcount == 1:
             item_id = int(cur.lastrowid or 0)
@@ -354,10 +429,39 @@ def request_reenrich(db: Database, item_id: int, *, now: datetime | None = None)
     with db.session() as conn:
         conn.execute(
             "UPDATE items SET enrichment_status='pending', enrichment_attempts=0, "
-            "enrichment_error=NULL, next_enrich_at=?, updated_at=? WHERE id=?",
+            "enrichment_error=NULL, next_enrich_at=?, updated_at=?, "
+            "transcript=CASE WHEN kind='voice' THEN NULL ELSE transcript END WHERE id=?",
             (stamp(now), stamp(now), item_id),
         )
         return _fetch(conn, item_id)
+
+
+def store_transcript(db: Database, item_id: int, text: str) -> None:
+    """Keep a Voice's Transcript as soon as STT lands, so a Classifier retry does not pay for it again."""
+    with db.session() as conn:
+        cur = conn.execute("UPDATE items SET transcript=? WHERE id=?", (text, item_id))
+        if cur.rowcount == 0:
+            raise KeyError(item_id)
+
+
+def request_show(db: Database, item_id: int, *, now: datetime | None = None) -> Item | None:
+    """Ask the bot to point at the Item's original message in the chat; None if missing."""
+    with db.session() as conn:
+        conn.execute("UPDATE items SET show_requested_at=? WHERE id=?", (stamp(now), item_id))
+        try:
+            return _fetch(conn, item_id)
+        except KeyError:
+            return None
+
+
+def claim_show_requests(db: Database) -> list[Item]:
+    """Every pending show request, cleared by the same statement so each is served once."""
+    with db.session() as conn:
+        rows = conn.execute(
+            "UPDATE items SET show_requested_at=NULL WHERE show_requested_at IS NOT NULL "
+            "RETURNING id"
+        ).fetchall()
+        return [_fetch(conn, int(row["id"])) for row in rows]
 
 
 def claim_due_enrichments(db: Database, *, now: datetime | None = None) -> list[int]:

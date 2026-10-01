@@ -7,7 +7,7 @@ from html import escape
 from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
 from aiogram.filters.callback_data import CallbackData
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, ReplyParameters, WebAppInfo
 
 from notes.domain.items import Capture, Item
 from notes.domain.sections import Section
@@ -19,7 +19,8 @@ log = get_logger(__name__)
 
 HELP = (
     "\n\n📌 <b>Notes</b> (admin only): any text or link you send gets a card — "
-    "💾 save to notes, one of the agents above, or cancel. Saved items are filed into "
+    "💾 save to notes, one of the agents above, or cancel. Voice and round video messages "
+    "are saved and transcribed straight away. Saved items are filed into "
     "sections; browse and sort them in the app (the 📒 button next to the message field)."
 )
 STATUS_LABELS = {"new": "новое", "started": "начато", "done": "готово"}
@@ -32,6 +33,7 @@ TITLE_LIMIT = 300
 OFFER_LABEL = "🤖 Агенты"
 RETURN_LABEL = "↩️ Вернуть"
 OPEN_LABEL = "✏️ Открыть"
+SHOW_TEXT = "↩️ Вот оно"
 
 
 class NotesCB(CallbackData, prefix="n"):
@@ -46,18 +48,23 @@ def sections_line(sections: tuple[Section, ...]) -> str:
 
 
 def title_of(item: Item) -> str:
-    text = item.title or item.url or item.file_name or item.text or "Файл"
+    fallback = "🎤 Голосовое" if item.kind == "voice" else "Файл"
+    text = item.title or item.url or item.file_name or item.text or fallback
     return escape(text if len(text) <= TITLE_LIMIT else text[: TITLE_LIMIT - 1] + "…")
 
 
 def acknowledgement(item: Item) -> str:
     if item.enrichment_status == "pending":
-        tail = "⏳ Разбираю ссылку…" if item.kind == "link" else "⏳ Разбираю…"
+        tail = {"link": "⏳ Разбираю ссылку…", "voice": "⏳ Расшифровываю…"}.get(
+            item.kind, "⏳ Разбираю…"
+        )
         return f"💾 Сохранено · {sections_line(item.sections)}\n{tail}"
     lines = [sections_line(item.sections), f"<b>{title_of(item)}</b>"]
     if item.gist:
         lines.append(escape(item.gist))
     origin = " · ".join(escape(part) for part in (item.source, item.author) if part)
+    if item.sender:
+        origin = " · ".join(part for part in (origin, f"↪️ {escape(item.sender)}") if part)
     if origin:
         lines.append(f"<i>{origin}</i>")
     if item.enrichment_status == "failed":
@@ -111,3 +118,47 @@ async def edit_acknowledgement(bot: Bot, item: Item) -> None:
             log.warning("item %s: could not edit its acknowledgement: %s", item.id, exc)
     except TelegramAPIError as exc:
         log.warning("item %s: could not edit its acknowledgement: %s", item.id, exc)
+
+
+async def show_in_chat(bot: Bot, item: Item) -> None:
+    """Reply to the Item's original message (the quote jumps to it); if it is gone, send it again."""
+    if item.tg_chat_id is None:
+        return
+    if item.tg_message_id is not None:
+        try:
+            await bot.send_message(
+                item.tg_chat_id,
+                SHOW_TEXT,
+                reply_parameters=ReplyParameters(message_id=item.tg_message_id),
+            )
+            return
+        except TelegramBadRequest as exc:
+            log.info("item %s: original message is gone: %s", item.id, exc)
+        except TelegramAPIError as exc:
+            log.warning("item %s: could not show it in the chat: %s", item.id, exc)
+            return
+    try:
+        await _resend(bot, item)
+    except TelegramAPIError as exc:
+        log.warning("item %s: could not show it in the chat: %s", item.id, exc)
+
+
+async def _resend(bot: Bot, item: Item) -> None:
+    chat, file_id, mime = item.tg_chat_id, item.file_id, item.file_mime or ""
+    assert chat is not None
+    caption = f"{SHOW_TEXT}: <b>{title_of(item)}</b>"
+    if file_id is None:
+        await bot.send_message(chat, f"Оригинал удалён: <b>{title_of(item)}</b>")
+    elif item.kind == "voice" and mime.startswith("video/"):
+        await bot.send_video_note(chat, file_id)
+    elif item.kind == "voice":
+        await bot.send_voice(chat, file_id, caption=caption)
+    elif item.file_name is None and mime.startswith("image/"):
+        await bot.send_photo(chat, file_id, caption=caption)
+    elif mime.startswith("video/"):
+        try:
+            await bot.send_video(chat, file_id, caption=caption)
+        except TelegramBadRequest:  # a video sent as a document keeps a document file_id
+            await bot.send_document(chat, file_id, caption=caption)
+    else:
+        await bot.send_document(chat, file_id, caption=caption)

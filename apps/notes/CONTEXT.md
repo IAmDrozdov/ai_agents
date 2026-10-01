@@ -12,7 +12,7 @@ The one person the bot answers and the Mini App serves.
 _Avoid_: user, admin, account
 
 **Item**:
-One saved thing — a Link, a Note or a File.
+One saved thing — a Link, a Note, a File or a Voice.
 _Avoid_: entry, record, post, bookmark, запись
 
 **Link**:
@@ -26,6 +26,18 @@ _Avoid_: memo, message, text item
 **File**:
 An Item that is a photo, video or non-text document sent to the bot; Telegram keeps the bytes, notes keep the `file_id` and a preview image.
 _Avoid_: attachment, upload
+
+**Voice**:
+An Item that is speech sent to the bot — a voice message or a round video message; Telegram keeps the bytes, notes keep the `file_id` and its Transcript.
+_Avoid_: audio, recording, голосовуха
+
+**Transcript**:
+The text of what is said in a Voice, written by Enrichment and never edited by the Owner.
+_Avoid_: text, caption, расшифровка
+
+**Sender**:
+Who a forwarded Capture came from — a person, a chat or a channel. Never the Author.
+_Avoid_: author, from, forwarder
 
 **Annotation**:
 The Owner's own words sent alongside a Link.
@@ -56,12 +68,16 @@ The swappable LLM-backed component that produces an Item's Filing and Gist.
 _Avoid_: AI, model, LLM (in domain talk)
 
 **Enrichment**:
-What is fetched and derived for a Link: title, Source, author, caption, thumbnail, Gist.
+What is fetched and derived for an Item after Capture: title, Source, Author, caption, thumbnail, a Voice's Transcript, Gist.
 _Avoid_: scraping, processing, decoding, metadata
 
 **Gist**:
 The one-or-two-sentence Russian summary of an Item written by the Classifier.
 _Avoid_: summary, description, суть, TL;DR
+
+**Author**:
+The person or channel who made a Link's content; not who sent it (that is the Sender).
+_Avoid_: creator, owner, sender
 
 **Source**:
 The platform or site a Link came from (YouTube, Instagram, TikTok, a domain).
