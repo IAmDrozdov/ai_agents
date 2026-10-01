@@ -21,7 +21,8 @@ TRANSCRIPT_HEAD = 400
 
 async def _smoke(text: str) -> int:
     extracted = extract_urls(text)
-    url = extracted.urls[0] if extracted.urls else None
+    # One URL is a Link; none or several is a Note of the whole text (ADR-0009).
+    url = extracted.urls[0] if len(extracted.urls) == 1 else None
     http = AiohttpClient()
     fetched: Fetched | None = None
     if url:
@@ -42,7 +43,7 @@ async def _smoke(text: str) -> int:
         title=fetched.title if fetched else None,
         author=fetched.author if fetched else None,
         caption=fetched.caption if fetched else None,
-        annotation=extracted.annotation,
+        annotation=extracted.annotation if url else text,
         sections=[SectionBrief(slug=s[0], name=s[1], hint=s[4]) for s in STARTER_SECTIONS],
     )
     return await _file(request, http, image is not None)

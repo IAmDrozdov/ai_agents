@@ -16,7 +16,7 @@ Kind = Literal["link", "note", "file", "voice"]
 Status = Literal["new", "started", "done"]
 Placement = Literal["active", "archived", "trashed"]
 EnrichmentStatus = Literal["pending", "done", "failed", "skipped"]
-CaptureOutcome = Literal["new", "existing", "restored", "archived"]
+CaptureOutcome = Literal["new", "existing", "restored", "unarchived"]
 
 TIMESTAMP = "%Y-%m-%d %H:%M:%S"
 BACKOFF = (
@@ -281,7 +281,7 @@ def capture_link(
     message_id: int | None = None,
     now: datetime | None = None,
 ) -> Capture:
-    """Save a Link once: a repeat returns the existing Item, restoring it if it was trashed."""
+    """Save a Link once: a repeat returns the existing Item, back to active if it was not (ADR-0009)."""
     key = normalize_url(url)
     with db.session() as conn:
         # OR IGNORE against the unique key makes a double-send race-free: the loser sees the row.
@@ -300,9 +300,10 @@ def capture_link(
             return Capture(_fetch(conn, item_id), "new")
         row = conn.execute("SELECT * FROM items WHERE url_normalized=?", (key,)).fetchone()
         existing = _row_to_item(conn, row)
-        if existing.placement == "trashed":
-            return Capture(_set_placement(conn, existing.id, "active", now), "restored")
-        return Capture(existing, "archived" if existing.placement == "archived" else "existing")
+        if existing.placement == "active":
+            return Capture(existing, "existing")
+        outcome: CaptureOutcome = "restored" if existing.placement == "trashed" else "unarchived"
+        return Capture(_set_placement(conn, existing.id, "active", now), outcome)
 
 
 def _set_placement(
@@ -344,15 +345,6 @@ def _replace_sections(conn: sqlite3.Connection, item_id: int, slugs: Sequence[st
         "INSERT INTO item_sections(item_id, section_id) VALUES (?, ?)",
         [(item_id, section_id) for section_id in section_ids],
     )
-
-
-def set_ack_message(db: Database, item_id: int, *, chat_id: int, message_id: int) -> Item:
-    with db.session() as conn:
-        conn.execute(
-            "UPDATE items SET tg_chat_id=?, tg_ack_message_id=? WHERE id=?",
-            (chat_id, message_id, item_id),
-        )
-        return _fetch(conn, item_id)
 
 
 def store_enrichment(

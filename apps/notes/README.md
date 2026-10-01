@@ -13,8 +13,8 @@ in the admin Mini App (ADR-016). Merged in from the standalone `maxi-notes` repo
 |---|---|
 | `apps/notes/src/notes/` | domain (`domain/`), sqlite store (`db.py`), Enrichment (`enrich/`), Classifier port (`classify/`), `sweeper.py`, `smoke.py` |
 | `interfaces/telegram_bot/…/handlers/documents.py` | the admin's ask-first card (`admin_input_handler`, 💾 on the price card) |
-| `interfaces/telegram_bot/…/handlers/notes.py` | 💾 saving, the 🤖 and ↩️ buttons, background enrichment and the sweeper |
-| `interfaces/telegram_bot/…/notes_ui.py` | Acknowledgement text and keyboard (Russian) |
+| `interfaces/telegram_bot/…/handlers/notes.py` | saving straight away and on 💾, the reactions, background enrichment and the sweeper; 🤖 and ↩️ only for buttons on old messages |
+| `interfaces/telegram_bot/…/notes_ui.py` | Acknowledgement reactions (✍ 👌 👎) and "show in chat" |
 | `interfaces/telegram_bot/…/miniapp/` | the Mini App: notes API and UI (`telegram-miniapp`) |
 
 ## Run

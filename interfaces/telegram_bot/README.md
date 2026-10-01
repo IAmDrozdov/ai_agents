@@ -102,8 +102,7 @@ Items (`apps/notes`, ADR-015). The routing table, card lifecycle and notes path 
 
 ## Mini App (admin only, ADR-016)
 
-The admin's chat has a `📒` menu button while `BOT_MINIAPP_URL` is set, and each saved
-item's message a `✏️ Открыть` button that opens that item. Both open the `miniapp` service
+The admin's chat has a `📒` menu button while `BOT_MINIAPP_URL` is set. It opens the `miniapp` service
 (`miniapp/`): a static shell plus a JSON API.
 
 - `GET /` and `/static/*` — the shell; public, no data

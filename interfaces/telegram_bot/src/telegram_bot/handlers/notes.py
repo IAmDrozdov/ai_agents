@@ -1,4 +1,4 @@
-"""Notes for the admin: 💾 on the card saves, then enriches in the background (ADR-015)."""
+"""Notes for the admin: a Capture is saved, enriched in the background and acknowledged by a reaction."""
 
 from __future__ import annotations
 
@@ -22,7 +22,6 @@ from notes.domain.items import Item
 from notes.domain.urls import extract_urls
 from notes.enrich.http import AiohttpClient, HttpClient
 from notes.enrich.pipeline import enrich_item
-from notes.enrich.providers import is_social_media, is_youtube
 from notes.enrich.voice import Download, VoiceRejected, VoiceUnavailable
 from notes.sweeper import run_sweeper
 from shared.config import settings
@@ -35,9 +34,11 @@ from ..notes_ui import NotesCB
 from .documents import (
     Draft,
     body_of,
+    card_link,
     draft_of,
-    first_link,
+    is_admin_text,
     is_agent_document,
+    links_of,
     offer_link,
     restore_draft,
     sender_of,
@@ -52,11 +53,6 @@ PREVIEW_MAX_BYTES = 300_000
 # The Bot API refuses getFile above this; a longer Voice cannot be transcribed.
 TELEGRAM_DOWNLOAD_MAX = 20 * 1024 * 1024
 SHOW_POLL_S = 2
-
-
-def is_direct_host(url: str) -> bool:
-    """Instagram, YouTube and TikTok links are saved as they are: there is no article to scrape."""
-    return is_youtube(url) or is_social_media(url)
 
 
 @dataclass
@@ -78,7 +74,7 @@ class NotesRuntime:
                 self.db,
                 http=self.http,
                 classifier=self.classifier,
-                notify=lambda item: notes_ui.edit_acknowledgement(bot, item),
+                notify=lambda item: notes_ui.acknowledge(bot, item),
                 interval_s=max(settings.notes_enrich_sweep_seconds, 5),
                 download=telegram_download(bot),
             )
@@ -104,7 +100,7 @@ class NotesRuntime:
                 item_id,
                 http=self.http,
                 classifier=self.classifier,
-                notify=lambda item: notes_ui.edit_acknowledgement(bot, item),
+                notify=lambda item: notes_ui.acknowledge(bot, item),
                 download=telegram_download(bot),
             )
         )
@@ -141,88 +137,70 @@ def build_runtime() -> NotesRuntime:
     return NotesRuntime(db=db, http=AiohttpClient(), classifier=make_classifier(settings))
 
 
-async def _save(card: Message, draft: Draft, bot: Bot, notes: NotesRuntime) -> None:
-    """Turn the card into the first Item's Acknowledgement; further links get their own."""
+async def _capture_draft(draft: Draft, chat_id: int, notes: NotesRuntime) -> tuple[Item, bool]:
+    """One Item per Capture: a Link for exactly one URL, else a Note of the whole text (ADR-0009)."""
     extracted = extract_urls(draft.text, linked=draft.links)
-    captured: list[tuple[Item, str | None]] = []
-    if not extracted.urls:
-        note = await asyncio.to_thread(
-            items.capture_note,
-            notes.db,
-            extracted.annotation,
-            sender=draft.sender,
-            chat_id=card.chat.id,
-            message_id=draft.message_id,
-        )
-        captured.append((note, None))
-    for url in extracted.urls:
+    if len(extracted.urls) == 1:
         capture = await asyncio.to_thread(
             items.capture_link,
             notes.db,
-            url,
+            extracted.urls[0],
             extracted.annotation,
             sender=draft.sender,
-            chat_id=card.chat.id,
+            chat_id=chat_id,
             message_id=draft.message_id,
         )
-        is_new = capture.outcome == "new"
-        captured.append((capture.item, None if is_new else notes_ui.duplicate(capture)))
-    await _acknowledge(card, captured, bot, notes)
+        log.info("notes: link capture %s → item %s", capture.outcome, capture.item.id)
+        return capture.item, capture.outcome == "new"
+    note = await asyncio.to_thread(
+        items.capture_note,
+        notes.db,
+        draft.text,
+        sender=draft.sender,
+        chat_id=chat_id,
+        message_id=draft.message_id,
+    )
+    return note, True
 
 
-async def _acknowledge(
-    card: Message, captured: list[tuple[Item, str | None]], bot: Bot, notes: NotesRuntime
+async def _settle(
+    bot: Bot, notes: NotesRuntime, chat_id: int, message_id: int, item: Item, is_new: bool
 ) -> None:
-    for index, (item, duplicate) in enumerate(captured):
-        text = duplicate or notes_ui.acknowledgement(item)
-        keyboard = notes_ui.item_keyboard(item)
-        if index == 0:
-            try:
-                await card.edit_text(text, reply_markup=keyboard)
-                sent = card
-            except TelegramBadRequest:  # the card is gone: acknowledge in a new message
-                sent = await card.answer(text, reply_markup=keyboard)
-        else:
-            sent = await card.answer(text, reply_markup=keyboard)
-        if duplicate is None:
-            await asyncio.to_thread(
-                items.set_ack_message,
-                notes.db,
-                item.id,
-                chat_id=sent.chat.id,
-                message_id=sent.message_id,
-            )
-            notes.enrich_later(bot, item.id)
+    """A new Item enriches and its reaction follows; a duplicate is in notes already."""
+    if is_new:
+        notes.enrich_later(bot, item.id)
+        return
+    failed = item.enrichment_status == "failed"
+    await notes_ui.react(bot, chat_id, message_id, notes_ui.LOOK if failed else notes_ui.DONE)
 
 
-def _is_direct_link(message: Message) -> bool:
-    """The admin's message whose first link is Instagram, YouTube or TikTok: saved with no card."""
-    user = message.from_user
-    if user is None or not is_admin(user.id) or message.document is not None:
-        return False
-    if message.photo or message.video or body_of(message).startswith("/"):
-        return False
-    url = first_link(draft_of(message))
-    return url is not None and is_direct_host(url)
+def _is_direct_text(message: Message) -> bool:
+    """The admin's text that gets no card: no URL, several, or one Instagram / YouTube / TikTok."""
+    return is_admin_text(message) and card_link(draft_of(message)) is None
 
 
-@router.message(_is_direct_link)
-async def direct_link_handler(message: Message, bot: Bot, notes: NotesRuntime | None) -> None:
-    """Admin: an Instagram / YouTube / TikTok link goes straight to notes (ADR-0007)."""
+@router.message(_is_direct_text)
+async def direct_text_handler(message: Message, bot: Bot, notes: NotesRuntime | None) -> None:
+    """Admin: text and social links go straight to notes as one Link or Note (ADR-0007, ADR-0009)."""
     user = message.from_user
     draft = draft_of(message)
-    url = first_link(draft)
-    if user is None or url is None:
+    if user is None:
         return
-    if notes is None:  # notes are down: keep the old path
-        await offer_link(message, url, user.id, draft)
+    if notes is None:  # notes are down: a social link still gets the agents' card
+        urls = links_of(draft)
+        if len(urls) == 1:
+            await offer_link(message, urls[0], user.id, draft)
+        else:
+            await notes_ui.react(bot, message.chat.id, message.message_id, notes_ui.LOOK)
         return
-    card = await message.answer("💾 Сохраняю…")
+    await notes_ui.react(bot, message.chat.id, message.message_id, notes_ui.WORKING)
     try:
-        await _save(card, draft, bot, notes)
+        item, is_new = await _capture_draft(draft, message.chat.id, notes)
     except Exception:
-        log.exception("notes: direct save of %s failed", url)
-        await card.edit_text("⚠️ Не удалось сохранить — пришли ещё раз.")
+        log.exception("notes: direct save of message %s failed", message.message_id)
+        await notes_ui.react(bot, message.chat.id, message.message_id, notes_ui.LOOK)
+        return
+    await _settle(bot, notes, message.chat.id, message.message_id, item, is_new)
 
 
 def _is_admin_file(message: Message) -> bool:
@@ -278,10 +256,10 @@ async def _download_preview(bot: Bot, thumb: Any) -> tuple[bytes, str] | None:
 async def file_handler(message: Message, bot: Bot, notes: NotesRuntime | None) -> None:
     """Admin: a photo or non-text file is saved as a File Item, with its preview for the Mini App."""
     if notes is None:
-        await message.answer("Notes are unavailable right now.")
+        await notes_ui.react(bot, message.chat.id, message.message_id, notes_ui.LOOK)
         return
     file_id, file_name, mime, size, thumb = _file_facts(message)
-    card = await message.answer("💾 Сохраняю…")
+    await notes_ui.react(bot, message.chat.id, message.message_id, notes_ui.WORKING)
     try:
         preview = await _download_preview(bot, thumb)
         item = await asyncio.to_thread(
@@ -294,13 +272,14 @@ async def file_handler(message: Message, bot: Bot, notes: NotesRuntime | None) -
             annotation=body_of(message),
             preview=preview,
             sender=sender_of(message),
-            chat_id=card.chat.id,
+            chat_id=message.chat.id,
             message_id=message.message_id,
         )
-        await _acknowledge(card, [(item, None)], bot, notes)
     except Exception:
         log.exception("notes: saving a file failed")
-        await card.edit_text("⚠️ Не удалось сохранить — пришли ещё раз.")
+        await notes_ui.react(bot, message.chat.id, message.message_id, notes_ui.LOOK)
+        return
+    await _settle(bot, notes, message.chat.id, message.message_id, item, True)
 
 
 def _is_admin_voice(message: Message) -> bool:
@@ -315,9 +294,9 @@ def _is_admin_voice(message: Message) -> bool:
 async def voice_handler(message: Message, bot: Bot, notes: NotesRuntime | None) -> None:
     """Admin: a voice or round video message becomes a Voice; Enrichment transcribes it."""
     if notes is None:
-        await message.answer("Notes are unavailable right now.")
+        await notes_ui.react(bot, message.chat.id, message.message_id, notes_ui.LOOK)
         return
-    card = await message.answer("💾 Сохраняю…")
+    await notes_ui.react(bot, message.chat.id, message.message_id, notes_ui.WORKING)
     try:
         if message.voice is not None:
             voice = message.voice
@@ -348,13 +327,14 @@ async def voice_handler(message: Message, bot: Bot, notes: NotesRuntime | None) 
             annotation=body_of(message),
             preview=preview,
             sender=sender_of(message),
-            chat_id=card.chat.id,
+            chat_id=message.chat.id,
             message_id=message.message_id,
         )
-        await _acknowledge(card, [(item, None)], bot, notes)
     except Exception:
         log.exception("notes: saving a voice failed")
-        await card.edit_text("⚠️ Не удалось сохранить — пришли ещё раз.")
+        await notes_ui.react(bot, message.chat.id, message.message_id, notes_ui.LOOK)
+        return
+    await _settle(bot, notes, message.chat.id, message.message_id, item, True)
 
 
 def _admin_message(callback: CallbackQuery) -> Message | None:
@@ -374,12 +354,22 @@ async def save_handler(callback: CallbackQuery, bot: Bot, notes: NotesRuntime | 
         await callback.answer("This card has expired — send it again.", show_alert=True)
         return
     try:
-        await _save(card, draft, bot, notes)
+        item, is_new = await _capture_draft(draft, card.chat.id, notes)
     except Exception:
         log.exception("notes: saving card %s failed", card.message_id)
         restore_draft(card.chat.id, card.message_id, draft)
         await callback.answer("Could not save — try again.", show_alert=True)
         return
+    try:
+        await card.delete()
+    except TelegramAPIError as exc:
+        log.warning("notes: could not delete card %s: %s", card.message_id, exc)
+    if draft.message_id is not None:
+        if is_new:
+            await notes_ui.react(bot, card.chat.id, draft.message_id, notes_ui.WORKING)
+        await _settle(bot, notes, card.chat.id, draft.message_id, item, is_new)
+    elif is_new:
+        notes.enrich_later(bot, item.id)
     await callback.answer()
 
 
@@ -410,10 +400,8 @@ async def restore_handler(
     ):
         await callback.answer()
         return
-    item = await asyncio.to_thread(items.set_placement, notes.db, callback_data.item_id, "active")
+    await asyncio.to_thread(items.set_placement, notes.db, callback_data.item_id, "active")
     await callback.answer("Вернул")
-    # A repeat tap: the card already shows this state.
+    # An old Acknowledgement message: its button goes; a repeat tap finds it gone already.
     with contextlib.suppress(TelegramBadRequest):
-        await message.edit_text(
-            notes_ui.acknowledgement(item), reply_markup=notes_ui.item_keyboard(item)
-        )
+        await message.edit_reply_markup(reply_markup=None)

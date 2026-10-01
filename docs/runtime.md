@@ -30,7 +30,7 @@ for the operator's address only while `infrastructure/ssh-gate.sh` runs a comman
 | `yt_dub` | Link (YouTube only) | Dubbed voice-over; captions first, STT fallback | chat + TTS (+ STT) |
 
 A non-YouTube link is scraped into a Markdown `DocumentSource` (`telegram_bot/scrape.py`) and
-then offered to the document agents. Admin plain text becomes `message.txt`. Every agent is
+then offered to the document agents. Plain text reaches them only as a `.txt` file. Every agent is
 `preview` (free) → `estimate` (free) → `run` (paid).
 
 ## Who gets what (routing)
@@ -43,8 +43,8 @@ only, plus `/start <invite>`. Routers then match in the order set in
 |---|---|---|
 | `start` | `/start`, `/help` (the admin's help adds a notes line) | everyone |
 | `admin` | `/invite`, `/users`, `/revoke` | admin |
-| `notes` | callbacks (`JobCB save`, `NotesCB`); messages: an Instagram / YouTube / TikTok link (`direct_link_handler`), a photo, video or non-agent document (`file_handler`), and a voice or round video message (`voice_handler`, a Voice, transcribed in Enrichment) are saved with no card (notes ADR-0007, ADR-0008) | admin |
-| `documents` | an agent document (.pdf .docx .md .markdown .txt) → card; **admin** text or caption → card with 💾 (`admin_input_handler`); anyone else's text containing a URL → card (`link_handler`) | all |
+| `notes` | callbacks (`JobCB save`, `NotesCB`); messages saved with no card and acknowledged by a reaction (notes ADR-0007, ADR-0008, ADR-0009): text with no URL, several URLs, or exactly one Instagram / YouTube / TikTok URL (`direct_text_handler`, one Note or Link); a photo, video or non-agent document (`file_handler`); a voice or round video message (`voice_handler`, a Voice, transcribed in Enrichment) | admin |
+| `documents` | an agent document (.pdf .docx .md .markdown .txt) → card; **admin** text with exactly one website URL → card with 💾 (`admin_input_handler`); anyone else's text containing a URL → card (`link_handler`) | all |
 | `settings_menu`, `status` | `/settings`, `/status`, `/cancel` | all |
 
 Plain text without a URL from an invitee matches nothing and is ignored.
@@ -65,7 +65,7 @@ picker, `s` set value, `t` try voice/model, `j` job actions (`run`/`settings`/`c
    - **Run** puts a `Job` on the FIFO `JobQueue` (max 5 per user, one running at a time). The
      worker edits the card with progress and delivers files or voice messages.
    - **Cancel** closes the card.
-   - **💾** closes the card and turns it into the notes Acknowledgement.
+   - **💾** saves one Item, deletes the card and reacts on the admin's original message.
    - **Settings → Back** re-prices the same card.
 
 Guards: only the card's own `pending` item can be run, cancelled or reopened. A card closed
@@ -78,9 +78,13 @@ except the admin.
 
 ## Notes path (`apps/notes`, ADR-015)
 
-💾 → `notes.save_handler` → `documents.take_draft` → `_save` (`capture_link` per URL with
-dedupe, or `capture_note`) → the card becomes the Acknowledgement → `enrich_later` →
-`notes.enrich.pipeline.enrich_item`:
+Text (`direct_text_handler`) and 💾 on a card (`save_handler` → `documents.take_draft`) go
+through `_capture_draft`: one Item per Capture, `capture_link` with dedupe for exactly one URL,
+else `capture_note` with the whole text. Files and voice (`file_handler`, `voice_handler`) go
+through `capture_file` / `capture_voice`. Then `enrich_later` → `notes.enrich.pipeline.enrich_item`. The bot sends no message: the Acknowledgement
+is its one reaction on the admin's message (`notes_ui.react`): ✍ working, 👌 in notes, 👎 take a
+look (notes ADR-0009). A duplicate gets 👌 at once with no Enrichment (👎 if its Enrichment had
+failed), and an archived or trashed one goes back to active. A Capture that throws, or notes being down, gets 👎. Enrichment:
 
 1. The provider fetch runs through the SSRF guard: YouTube and TikTok oEmbed, the Instagram
    captioned embed page, or a generic page. A Voice is downloaded from Telegram instead (the bot
@@ -88,21 +92,22 @@ dedupe, or `capture_note`) → the card becomes the Acknowledgement → `enrich_
    Transcript is stored at once, so a Classifier retry does not pay for STT again.
 2. The Classifier (`NOTES_CLASSIFIER_PROVIDER`: `openai`, or `fake` offline) chooses the
    Sections, the Russian Gist and the title.
-3. `store_enrichment` saves the result, and `notify` edits the Acknowledgement.
+3. `store_enrichment` saves the result, and `notify` (`notes_ui.acknowledge`) sets the reaction
+   from `enrichment_status` on `tg_message_id`.
 
 Failures go to `schedule_retry` (backoff 1 min → 12 h, then `failed`). The sweeper
-(`NOTES_ENRICH_SWEEP_SECONDS`) retries anything due and anything a restart interrupted. On a
-saved link, 🤖 runs `documents.offer_link` again. `apps/*` never imports aiogram: the bot
-passes `notify` and `download` in as callbacks. If notes fails to start, the bot runs without it and 💾
-answers "Notes are unavailable".
+(`NOTES_ENRICH_SWEEP_SECONDS`) retries anything due and anything a restart interrupted; a retry
+leaves ✍ in place. `apps/*` never imports aiogram: the bot passes `notify` and `download` in as
+callbacks. If notes fails to start, the bot runs without it: direct messages get 👎, a link still
+gets its card, and 💾 answers "Notes are unavailable". The `NotesCB` handlers (🤖, ↩️) stay only
+for buttons on old Acknowledgement messages.
 
 Language: the bot UI is English; notes texts and the Mini App are Russian.
 
 ## Admin Mini App (`telegram_bot/miniapp`, ADR-016)
 
 While `BOT_MINIAPP_URL` is set, the bot gives the admin's chat a `📒` menu button
-(`__main__.set_admin_menu_button`, at startup, for that chat only), and every saved-item message
-a `✏️ Открыть` button (`notes_ui.item_keyboard`, a `web_app` button with `/?item=<id>`). Both open
+(`__main__.set_admin_menu_button`, at startup, for that chat only). It opens
 the `miniapp` service through the funnel sidecar: a static shell (`miniapp/static`, vanilla JS)
 that calls `/api/usage` and `/api/notes/*`. The Заметки tab filters, pages, edits an item
 (Sections, Status, Placement, Annotation, Reviewed), re-enriches, deletes a trashed one, and runs
@@ -115,7 +120,7 @@ Every `/api` call carries `Authorization: tma <initData>`. `miniapp/auth.py` che
 HMAC against `MINIAPP_INIT_SECRET`, requires `auth_date` under 24 h and admits only
 `ADMIN_TELEGRAM_ID` (401 or 403). The API only parses and serialises; the rules stay in
 `apps/notes`. A re-enrich from the app flips the Item to `pending` and the bot's sweeper does
-the work. Edits made in the app do not re-render Acknowledgement messages in the chat.
+the work. Edits made in the app do not change the reaction in the chat.
 
 ## State that lives only in memory
 

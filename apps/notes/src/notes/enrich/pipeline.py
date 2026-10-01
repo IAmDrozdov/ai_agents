@@ -26,7 +26,7 @@ from shared.obs import get_logger
 
 log = get_logger(__name__)
 
-# Called with the stored Item once Enrichment lands, e.g. to edit the Acknowledgement.
+# Called with the stored Item once Enrichment lands, e.g. to update the Acknowledgement.
 Notify = Callable[[Item], Awaitable[None]]
 
 

@@ -39,7 +39,8 @@ thin-adapter rule (ADR-005).
    once 💾 is tapped. A saved link's 🤖 button reopens the card. Documents never offer 💾.
    Invitees see no change. A card that was cancelled or saved while it was still being
    priced is no longer overwritten when pricing finishes, which also fixes an old Cancel
-   race for everyone.
+   race for everyone. Narrowed by notes ADR-0009: only a single website link gets the card;
+   💾 deletes it and the Acknowledgement is a reaction.
 5. **Storage.** A separate sqlite file (`NOTES_DB_PATH`, `/data/notes.sqlite3` in
    production) on the existing `appdata` volume. Notes and the bot's usage tables share
    nothing.

@@ -16,11 +16,11 @@ One saved thing — a Link, a Note, a File or a Voice.
 _Avoid_: entry, record, post, bookmark, запись
 
 **Link**:
-An Item whose content is a URL, optionally with the Owner's Annotation.
+An Item whose content is the one URL in its Capture, optionally with the Owner's Annotation.
 _Avoid_: bookmark, url item
 
 **Note**:
-An Item that is plain text with no URL.
+An Item that is text with no URL, or with more than one; the text is kept whole.
 _Avoid_: memo, message, text item
 
 **File**:
@@ -44,12 +44,12 @@ The Owner's own words sent alongside a Link.
 _Avoid_: note, comment, caption
 
 **Capture**:
-Sending the bot a message that becomes one or more Items.
+Sending the bot a message that becomes exactly one Item.
 _Avoid_: save, ingest, submit, forward
 
 **Acknowledgement**:
-The bot's reply to a Capture, edited in place when Enrichment lands; carries the Filing keyboard.
-_Avoid_: confirmation, receipt, card, ack (in prose)
+The bot's single reaction on the Owner's Capture message, saying whether to wait, nothing to do, or take a look; the bot leaves no message of its own.
+_Avoid_: confirmation, receipt, card, reply, ack (in prose)
 
 **Section**:
 A category the Owner files Items under; an Item is in one or more.

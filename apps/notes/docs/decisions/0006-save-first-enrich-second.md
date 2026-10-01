@@ -6,6 +6,8 @@ process is the retry queue) with backoff, and the Acknowledgement is edited in p
 lands. A network, provider or LLM failure can therefore never lose a Capture — the product's
 promise is that nothing thrown at the bot is lost.
 
+Since ADR-0009 the Acknowledgement is a reaction on the Owner's message, updated in place the same way.
+
 ## Considered Options
 
 - Enrich synchronously and reply once with the full result — rejected: a slow or failing fetch delays or loses the one thing the Owner cares about, the confirmation that it is saved.

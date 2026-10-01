@@ -34,7 +34,8 @@ needs public HTTPS.
 5. **Entry points.** The admin's chat gets a per-chat menu button `📒`, set at bot
    startup (invitees keep the default menu). Each saved-item message gets `✏️ Открыть`, a
    `web_app` button that opens the item (`/?item=<id>`; never a `#fragment`, because Telegram
-   puts its launch data there).
+   puts its launch data there). Since notes ADR-0009 there are no saved-item messages, so the
+   `📒` button is the only entry point; `/?item=<id>` still works.
 6. **Backlog.** Notes tickets 06 (chat keyboard) and 07 (`/list`) are replaced by the app. 08
    (sorting pass) and 09 (Section management) are built in the app instead of on the web UI.
 
@@ -46,6 +47,5 @@ needs public HTTPS.
 - A Tailscale account is required, and the node's key expiry must be disabled, or the app stops
   loading after about 180 days.
 - The app works only inside Telegram; there is no browser fallback.
-- Acknowledgement messages in the chat are snapshots: an edit in the app does not re-render
-  them. `✏️ Открыть` always opens the live state.
+- An edit in the app is not reflected in the chat; the app always shows the live state.
 - The Mini App process can write both sqlite files, as `notes-web` could.

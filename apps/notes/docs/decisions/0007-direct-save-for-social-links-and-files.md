@@ -10,6 +10,8 @@ the model as a low-detail image. When the model answers `confident: false` for a
 asked once more with the start of the video's captions (yt-dlp, no download). Files are `kind='file'`
 with the Telegram `file_id` and a stored preview (`item_previews`).
 
+Narrowed by ADR-0009: only a message with exactly one non-social URL keeps the card.
+
 ## Considered Options
 
 - Logging in to Instagram / YouTube for richer data — rejected: ADR-0005 forbids Instagram login (datacenter IP, `challenge_required` risk); public data covers what Filing needs.

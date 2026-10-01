@@ -23,6 +23,8 @@ from aiogram.types import (
     MessageOriginUser,
 )
 
+from notes.domain.urls import extract_urls
+from notes.enrich.providers import is_social_media, is_youtube
 from shared.config import settings
 from shared.job import DocumentSource, Estimate, LinkSource, Preview, Source
 from shared.obs import get_logger
@@ -507,33 +509,45 @@ def draft_of(message: Message) -> Draft:
     )
 
 
-def first_link(draft: Draft) -> str | None:
-    return _first_url(draft.text) or (draft.links[0] if draft.links else None)
+def is_direct_host(url: str) -> bool:
+    """Instagram, YouTube and TikTok links are saved as they are: there is no article to scrape."""
+    return is_youtube(url) or is_social_media(url)
 
 
-def _is_admin_input(message: Message) -> bool:
-    """The admin's non-command text or caption (not a file): ask what to do with it."""
+def links_of(draft: Draft) -> tuple[str, ...]:
+    """Every URL in a Draft, plain and behind text, as notes counts them."""
+    return extract_urls(draft.text, linked=draft.links).urls
+
+
+def card_link(draft: Draft) -> str | None:
+    """The one website link that earns the admin a card; anything else is saved straight away."""
+    urls = links_of(draft)
+    return urls[0] if len(urls) == 1 and not is_direct_host(urls[0]) else None
+
+
+def is_admin_text(message: Message) -> bool:
+    """The admin's non-command text message; a caption belongs to its media."""
     user = message.from_user
-    if user is None or not is_admin(user.id) or message.document is not None:
+    if user is None or not is_admin(user.id) or message.text is None:
         return False
     body = body_of(message)
     return bool(body) and not body.startswith("/")
 
 
+def _is_admin_input(message: Message) -> bool:
+    """The admin's message with exactly one website link: ask what to do with it (ADR-0009)."""
+    return is_admin_text(message) and card_link(draft_of(message)) is not None
+
+
 @router.message(_is_admin_input)
 async def admin_input_handler(message: Message) -> None:
-    """Admin: one card for anything sent — 💾 to notes, the priced agents, or Cancel (ADR-015)."""
+    """Admin: a card for one website link — 💾 to notes, the priced agents, or Cancel (ADR-015)."""
     user = message.from_user
-    if user is None:
-        return
     draft = draft_of(message)
-    body = draft.text
-    url = first_link(draft)
-    if url is not None:
-        await offer_link(message, url, user.id, draft)
+    url = card_link(draft)
+    if user is None or url is None:
         return
-    source = DocumentSource(body.encode("utf-8"), "message.txt")
-    await _begin_pending(message, source, user.id, "⏳ Estimating…", draft)
+    await offer_link(message, url, user.id, draft)
 
 
 @router.message(_looks_like_link)

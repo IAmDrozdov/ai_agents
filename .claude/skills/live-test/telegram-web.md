@@ -27,13 +27,13 @@ bot chat's URL) live in `CLAUDE.local.md`, which is gitignored because this repo
   `take_screenshot` on the iframe's uid (a full-page shot shows the owner's chat list).
 - To drive the app top-level (a plain tab, easier to script), read the iframe `src` for the real
   `tgWebAppData` hash and open it in a new tab; that hash is the credential from the guardrails.
-- Ack messages are edited in place after Enrichment: wait for the edit (poll the snapshot every few
-  seconds, up to a minute) before reading the result.
+- The Acknowledgement is the bot's reaction on your message (✍ → 👌 or 👎, notes ADR-0009), and
+  the bot sends no message: poll the snapshot every few seconds, up to a minute, until ✍ is gone.
 - If this Mac is on the tailnet that publishes the Mini App, Chrome blocks the iframe (MagicDNS
   resolves to a private address): `tailscale set --accept-dns=false`, wait until the name no longer
   resolves to `100.x`, test, then `--accept-dns=true`.
 
 ## Cleanup
 - Test messages (yours and the bot's, under 48 h old): `send_media.py delete <message_id…>`; the
-  ids are in the snapshot or in `tg_message_id` / `tg_ack_message_id` of the Item.
+  ids are in the snapshot or in `tg_message_id` of the Item (older Items also `tg_ack_message_id`).
 - Test Items: Mini App → item → «В корзину», then Корзина → «Удалить навсегда».
