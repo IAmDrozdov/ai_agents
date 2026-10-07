@@ -82,6 +82,13 @@ CREATE TABLE IF NOT EXISTS item_previews (
     data    BLOB NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS item_thumbs (
+    item_id INTEGER PRIMARY KEY REFERENCES items(id) ON DELETE CASCADE,
+    mime    TEXT NOT NULL,
+    etag    TEXT NOT NULL,
+    data    BLOB NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS item_sections (
     item_id    INTEGER NOT NULL REFERENCES items(id) ON DELETE CASCADE,
     section_id INTEGER NOT NULL REFERENCES sections(id) ON DELETE CASCADE,

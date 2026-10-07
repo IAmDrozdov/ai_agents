@@ -29,6 +29,10 @@ bot chat's URL) live in `CLAUDE.local.md`, which is gitignored because this repo
   `take_screenshot` on the iframe's uid (a full-page shot shows the owner's chat list).
 - To drive the app top-level (a plain tab, easier to script), read the iframe `src` for the real
   `tgWebAppData` hash and open it in a new tab; that hash is the credential from the guardrails.
+  `list_pages`, `select_page` and `navigate_page` print every tab's full URL, so strip the hash at
+  once in the new tab (`history.replaceState(null, "", location.pathname + location.search)`;
+  `telegram-web-app.js` has already read it). Outside Telegram, `DeviceStorage` never answers; and
+  Telegram Web answers it `UNSUPPORTED`. So the app keeps its snapshot in `localStorage` there.
 - The Acknowledgement is the bot's reaction on your message (✍ → 👌 or 👎, notes ADR-0009), and
   the bot sends no message: poll the snapshot every few seconds, up to a minute, until ✍ is gone.
 - If this Mac is on the tailnet that publishes the Mini App, Chrome blocks the iframe (MagicDNS

@@ -42,6 +42,124 @@ export function slot(node, key, build) {
 
 export class AuthError extends Error {}
 
+// --- snapshots: the last answers, kept across launches so a view paints before the network answers (ADR-019) ---
+
+const SNAPSHOT_KEY = "snapshot_v1";
+const SNAPSHOT_ENTRIES = 40;
+const SNAPSHOT_CHARS = 900_000; // DeviceStorage holds 5 MB per user
+const SNAPSHOT_READ_MS = 500;
+const snapshots = new Map(); // key -> data, the most recent last
+let persistTimer = 0;
+let wiped = false; // a 401 or 403 cleared them: nothing writes them again during this launch
+
+// DeviceStorage persists on the phones (Bot API 9.0); localStorage does not on some webviews. A client may still
+// answer DeviceStorage with an error (Telegram Web: UNSUPPORTED), and then this launch uses localStorage.
+let deviceStorageFailed = false;
+const deviceStorage = () => (!deviceStorageFailed && atLeast("9.0") && tg.DeviceStorage) || null;
+const localKey = () => `${SNAPSHOT_KEY}_${tg.initDataUnsafe?.user?.id ?? "anon"}`;
+
+function readLocal() {
+  try {
+    return localStorage.getItem(localKey());
+  } catch {
+    return null;
+  }
+}
+
+function readSnapshots() {
+  const store = deviceStorage();
+  if (!store) return Promise.resolve(readLocal());
+  return new Promise((resolve) => {
+    const fallBack = () => {
+      deviceStorageFailed = true;
+      resolve(readLocal());
+    };
+    const timer = setTimeout(() => resolve(null), SNAPSHOT_READ_MS); // slow, not broken: keep DeviceStorage
+    try {
+      store.getItem(SNAPSHOT_KEY, (error, value) => {
+        clearTimeout(timer);
+        if (error) fallBack();
+        else resolve(value);
+      });
+    } catch {
+      clearTimeout(timer);
+      fallBack();
+    }
+  });
+}
+
+function writeLocal(raw) {
+  try {
+    if (raw == null) localStorage.removeItem(localKey());
+    else localStorage.setItem(localKey(), raw);
+  } catch {
+    // full or blocked storage: the app works without snapshots
+  }
+}
+
+function writeSnapshots(raw) {
+  const store = deviceStorage();
+  if (!store) {
+    writeLocal(raw);
+    return;
+  }
+  const done = (error) => {
+    if (!error) return;
+    deviceStorageFailed = true;
+    writeLocal(raw);
+  };
+  try {
+    if (raw == null) store.removeItem(SNAPSHOT_KEY, done);
+    else store.setItem(SNAPSHOT_KEY, raw, done);
+  } catch {
+    done(true);
+  }
+}
+
+// Reads what the last launch kept; never throws and never waits longer than SNAPSHOT_READ_MS.
+export async function loadSnapshots() {
+  const raw = await readSnapshots();
+  try {
+    const parsed = raw ? JSON.parse(raw) : null;
+    if (parsed?.v === 1 && Array.isArray(parsed.entries)) {
+      for (const [key, data] of parsed.entries) snapshots.set(key, data);
+    }
+  } catch {
+    // a damaged snapshot is no snapshot
+  }
+}
+
+export const snapshot = (key) => snapshots.get(key) ?? null;
+
+export function keepSnapshot(key, data) {
+  if (wiped) return;
+  snapshots.delete(key);
+  snapshots.set(key, data);
+  while (snapshots.size > SNAPSHOT_ENTRIES) snapshots.delete(snapshots.keys().next().value);
+  clearTimeout(persistTimer);
+  persistTimer = setTimeout(() => {
+    let entries = [...snapshots];
+    let raw = JSON.stringify({ v: 1, entries });
+    while (raw.length > SNAPSHOT_CHARS && entries.length > 1) {
+      entries = entries.slice(1);
+      raw = JSON.stringify({ v: 1, entries });
+    }
+    writeSnapshots(raw);
+  }, 300);
+}
+
+function forgetSnapshots() {
+  wiped = true;
+  snapshots.clear();
+  clearTimeout(persistTimer);
+  writeSnapshots(null);
+  writeLocal(null); // a launch that fell back may have left a copy here too
+}
+
+// The pause before asking again about an Item still being enriched: quick at first, then every 30 s.
+const POLL_STEPS_MS = [3000, 5000, 10000, 20000, 30000];
+export const pollDelay = (step) => POLL_STEPS_MS[Math.min(step, POLL_STEPS_MS.length - 1)];
+
 export async function api(path, { method = "GET", body } = {}) {
   const headers = { Authorization: "tma " + tg.initData };
   if (body !== undefined) headers["Content-Type"] = "application/json";
@@ -50,8 +168,10 @@ export async function api(path, { method = "GET", body } = {}) {
     headers,
     body: body === undefined ? undefined : JSON.stringify(body),
   });
-  if (response.status === 401) throw new AuthError("expired");
-  if (response.status === 403) throw new AuthError("forbidden");
+  if (response.status === 401 || response.status === 403) {
+    forgetSnapshots(); // nothing of the Owner's stays on a device that lost access
+    throw new AuthError(response.status === 401 ? "expired" : "forbidden");
+  }
   if (!response.ok) {
     let detail = response.status === 422 ? "Проверь введённые данные" : "Ошибка " + response.status;
     try {
@@ -65,16 +185,18 @@ export async function api(path, { method = "GET", body } = {}) {
   return response.status === 204 ? null : response.json();
 }
 
-const blobUrls = new Map();
+const images = new Map(); // path -> Promise of an object URL, shared by every card asking for it
 
 // An authed image as an object URL (an <img src> cannot carry the Authorization header); null if missing.
-export async function apiImageUrl(path) {
-  if (blobUrls.has(path)) return blobUrls.get(path);
-  const response = await fetch("/api" + path, { headers: { Authorization: "tma " + tg.initData } });
-  if (!response.ok) return null;
-  const url = URL.createObjectURL(await response.blob());
-  blobUrls.set(path, url);
-  return url;
+export function apiImageUrl(path) {
+  if (!images.has(path)) {
+    const load = fetch("/api" + path, { headers: { Authorization: "tma " + tg.initData } })
+      .then(async (response) => (response.ok ? URL.createObjectURL(await response.blob()) : null))
+      .catch(() => null);
+    images.set(path, load);
+    load.then((url) => url || images.delete(path)); // a failed one is asked for again next time
+  }
+  return images.get(path);
 }
 
 let toastTimer = null;

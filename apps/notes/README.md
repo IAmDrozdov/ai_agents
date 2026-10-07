@@ -5,7 +5,7 @@ are saved at once, enriched (title, author, caption, thumbnail, a voice's transc
 in the admin Mini App (ADR-016). Merged in from the standalone `maxi-notes` repo (ADR-015).
 
 - Vocabulary: `CONTEXT.md` (separate from the repo glossary: **Source** means something else here)
-- Decisions: `docs/decisions/0001–0010` · Spec: `docs/spec.md` · Tickets: `docs/tickets/`
+- Decisions: `docs/decisions/0001–0012` · Spec: `docs/spec.md` · Tickets: `docs/tickets/`
 
 ## Layout
 
@@ -24,6 +24,7 @@ uv run notes-smoke https://youtu.be/dQw4w9WgXcQ   # fetch + file one input, prin
 uv run notes-smoke --voice memo.ogg               # transcribe + file a voice file
 uv run notes-smoke --now "2026-10-07 20:58" --zone Europe/Warsaw "напомни завтра"   # prints the Due
 uv run notes-smoke http://169.254.169.254/         # the SSRF guard refuses it
+uv run notes-thumbs                                # give Items without a Thumbnail one (ADR-0012), safe to rerun
 uv run telegram-bot                                # 💾 on the card for ADMIN_TELEGRAM_ID
 uv run telegram-miniapp                            # http://127.0.0.1:8083, opened from Telegram
 ```

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict
+from dataclasses import asdict, fields
 from datetime import UTC, date, datetime
 from typing import Annotated, Any
 
@@ -17,6 +17,8 @@ from notes.domain.items import UNSET, DayField, Item, ItemFilter, Status, Unset
 from .auth import require_admin
 
 router = APIRouter(prefix="/api/notes", dependencies=[Depends(require_admin)])
+
+ItemId = Annotated[int, Field(ge=1, le=2**63 - 1)]  # sqlite's INTEGER range
 
 
 class ItemPatch(BaseModel):
@@ -59,9 +61,22 @@ def get_db(request: Request) -> Database:
 DbDep = Annotated[Database, Depends(get_db)]
 
 
+# Item fields the page never reads: bookkeeping, or a cover the Thumbnail replaced (ADR-019).
+HIDDEN_FIELDS = frozenset(
+    {
+        "url_normalized", "image_url", "file_id", "file_size", "done_at", "enrichment_attempts",
+        "tg_chat_id", "tg_ack_message_id", "show_requested_at", "reminded_at", "updated_at",
+        "sections",
+    }
+)  # fmt: skip
+SECTION_FIELDS = ("id", "slug", "name", "emoji", "color")
+
+
 def _item_json(item: Item) -> dict[str, Any]:
-    """An Item as the page reads it: the Due as ISO UTC, the rest as stored."""
-    data = asdict(item) | {"overdue": item.is_overdue()}
+    """An Item as the page reads it, list and item view alike: the Due as ISO UTC."""
+    data = {f.name: getattr(item, f.name) for f in fields(item) if f.name not in HIDDEN_FIELDS}
+    data["sections"] = [{key: getattr(s, key) for key in SECTION_FIELDS} for s in item.sections]
+    data["overdue"] = item.is_overdue()
     if item.due_at:
         data["due_at"] = _iso(item.due_at)
     return data
@@ -147,12 +162,16 @@ def get_items(
     day: date | None = None,
     day_field: DayField = "captured",
     tz: Annotated[str, Query(max_length=64)] = "UTC",
+    ids: Annotated[list[ItemId] | None, Query(max_length=100)] = None,
     offset: Annotated[int, Query(ge=0)] = 0,
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
 ) -> dict[str, Any]:
     if day is not None and not date(2000, 1, 1) <= day <= date(2100, 1, 1):
         raise HTTPException(status_code=422, detail="day out of range")
-    if overdue:  # the Overdue row: every Section, todo only, earliest Due first
+    if ids:  # the page checking back on the Items it shows as pending
+        flt = ItemFilter(ids=tuple(ids), status=None)
+        limit = len(ids)
+    elif overdue:  # the Overdue row: every Section, todo only, earliest Due first
         flt = ItemFilter(status="todo", overdue=True)
     else:
         flt = ItemFilter(
@@ -181,6 +200,19 @@ def get_item_preview(item_id: int, db: DbDep) -> Response:
     return Response(
         content=data, media_type=mime, headers={"Cache-Control": "private, max-age=3600"}
     )
+
+
+@router.get("/items/{item_id}/thumb")
+def get_item_thumb(item_id: int, request: Request, db: DbDep) -> Response:
+    """The card picture; its URL carries the etag (`?v=`), so the webview keeps it for good."""
+    thumb = items.get_thumb(db, item_id)
+    if thumb is None:
+        raise HTTPException(status_code=404, detail="No thumbnail")
+    data, mime, etag = thumb
+    headers = {"Cache-Control": "private, max-age=31536000, immutable", "ETag": f'"{etag}"'}
+    if f'"{etag}"' in request.headers.get("if-none-match", ""):
+        return Response(status_code=304, headers=headers)
+    return Response(content=data, media_type=mime, headers=headers)
 
 
 @router.post("/items/{item_id}/reenrich")

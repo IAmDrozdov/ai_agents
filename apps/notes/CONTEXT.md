@@ -83,6 +83,10 @@ _Avoid_: AI, model, LLM (in domain talk)
 What is fetched and derived for an Item after Capture: title, Source, Author, caption, thumbnail, a Voice's Transcript, Gist.
 _Avoid_: scraping, processing, decoding, metadata
 
+**Thumbnail**:
+The small square picture a card shows, cut during Enrichment from a Link's cover or a File's preview and kept with the Item; never loaded from the Link's site.
+_Avoid_: cover, preview, image, обложка
+
 **Gist**:
 The one-or-two-sentence Russian summary of an Item written by the Classifier.
 _Avoid_: summary, description, суть, TL;DR

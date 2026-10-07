@@ -1,7 +1,22 @@
 // Заметки: every Section as an accordion with its own Status switch (ADR-0010), Search over all Items, and an edit
 // mode that reorders Sections by drag and drop. The state lives in memory for one launch.
 
-import { AuthError, api, attempt, el, handleError, haptic, isHalted, reconcile, setText, toast } from "./core.js";
+import {
+  AuthError,
+  api,
+  attempt,
+  el,
+  handleError,
+  haptic,
+  isHalted,
+  keepSnapshot,
+  parseTs,
+  pollDelay,
+  reconcile,
+  setText,
+  snapshot,
+  toast,
+} from "./core.js";
 import { OVERDUE, card, sectionLabel } from "./cards.js";
 import { openDetail } from "./detail.js";
 import { openSectionForm } from "./sections.js";
@@ -10,33 +25,37 @@ const PAGE = 30;
 const MAX_CHUNK = 100; // the most items the server returns in one request
 const SEARCH_DELAY_MS = 300;
 const STALE_AFTER_MS = 350;
-const PENDING_POLL_MS = 3000;
+const RETRY_SLACK_MS = 5000; // after a scheduled Enrichment retry, before asking how it went
 const EDGE = 56; // a drag this close to the top or bottom of the screen scrolls the page
 const STATUSES = [
   ["todo", "Сделать"],
   ["done", "Готово"],
 ];
 
-// `want` items from `offset`, in requests the server accepts, all under `base`.
+// `want` items from `offset`, in requests the server accepts, all under `base`: the chunks after the first go at once.
 async function fetchItems(base, offset, want) {
-  const items = [];
-  for (;;) {
+  const chunk = (at, limit) => {
     const query = new URLSearchParams(base);
-    query.set("offset", String(offset + items.length));
-    query.set("limit", String(Math.min(MAX_CHUNK, want - items.length)));
-    const data = await api("/notes/items?" + query);
-    items.push(...data.items);
-    if (!data.items.length || items.length >= want || offset + items.length >= data.total) {
-      return { items, total: data.total };
-    }
+    query.set("offset", String(at));
+    query.set("limit", String(limit));
+    return api("/notes/items?" + query);
+  };
+  const first = await chunk(offset, Math.min(MAX_CHUNK, want));
+  const items = [...first.items];
+  const end = Math.min(offset + want, first.total);
+  const rest = [];
+  for (let at = offset + items.length; items.length && at < end; at += MAX_CHUNK) {
+    rest.push(chunk(at, Math.min(MAX_CHUNK, end - at)));
   }
+  for (const data of await Promise.all(rest)) items.push(...data.items);
+  return { items, total: first.total };
 }
 
 // ctx.isCurrent() is false while another tab is shown. Returns { show(arg), shown(), hide() };
 // arg: { expand: slug } (a Dashboard Section bar) or { itemId } (the ✏️ Открыть button in the chat).
 export async function mountNotes(root, ctx) {
   const state = {
-    sections: [], // in the Owner's order, each with todo_count and done_count
+    sections: snapshot("sections")?.sections ?? [], // in the Owner's order, each with todo_count and done_count
     expanded: new Set(), // slugs
     status: new Map(), // slug -> Status; a missing slug is on todo
     query: "", // the Search text the results belong to
@@ -77,6 +96,7 @@ export async function mountNotes(root, ctx) {
 
   const statusOf = (slug) => state.status.get(slug) || "todo";
   const searching = () => state.results != null && !state.editing;
+  const snapshotKey = (g) => (g === overdue ? "overdue" : `group:${g.slug}:${statusOf(g.slug)}`);
 
   // --- groups --------------------------------------------------------------
 
@@ -227,19 +247,29 @@ export async function mountNotes(root, ctx) {
     if (!reset && g.loading) return;
     const ticket = ++g.ticket;
     const status = statusOf(g.slug);
+    const key = snapshotKey(g);
+    const kept = reset && !g.loaded ? snapshot(key) : null;
+    if (kept) {
+      // the last launch's list shows at once; the fresh one replaces it below
+      g.items = kept.items;
+      g.total = kept.total;
+      g.loaded = true;
+      g.section[status + "_count"] = kept.total;
+    }
     g.loading = true;
     g.more.disabled = true;
+    if (kept) render();
     const dim = () => {
       if (ticket === g.ticket) g.list.classList.add("stale");
     };
-    const staleTimer = reset && g.items.length ? setTimeout(dim, STALE_AFTER_MS) : null;
+    const staleTimer = reset && g.items.length && !kept ? setTimeout(dim, STALE_AFTER_MS) : null;
     const base = g === overdue ? new URLSearchParams({ overdue: "true" }) : new URLSearchParams({ section: g.slug, status });
     const data = await attempt(() => fetchItems(base, reset ? 0 : g.items.length, want));
     clearTimeout(staleTimer);
     if (ticket !== g.ticket) return;
     g.list.classList.remove("stale");
     g.loading = false;
-    g.failed = !data && !soft;
+    g.failed = !data && !soft && !kept;
     if (data) {
       // offsets shift when an item is added or moved between two requests: never list one twice
       const seen = new Set(reset ? [] : g.items.map((item) => item.id));
@@ -248,7 +278,8 @@ export async function mountNotes(root, ctx) {
       g.total = data.total;
       g.loaded = true;
       g.section[status + "_count"] = data.total;
-    } else if (reset && (!soft || !g.loaded)) {
+      if (reset) keepSnapshot(key, { items: g.items.slice(0, PAGE), total: g.total });
+    } else if (reset && !kept && (!soft || !g.loaded)) {
       g.items = [];
       g.total = 0;
       g.loaded = true;
@@ -266,7 +297,10 @@ export async function mountNotes(root, ctx) {
     const data = await attempt(() => api("/notes/sections"));
     if (ticket !== sectionsTicket) return;
     sectionsFailed = !data && !state.sections.length;
-    if (data && gen === orderGen && !drag && !orderSaving) state.sections = data.sections;
+    if (data && gen === orderGen && !drag && !orderSaving) {
+      state.sections = data.sections;
+      keepSnapshot("sections", data); // only an answer the page took: an older order is never kept
+    }
     render();
   }
 
@@ -281,14 +315,40 @@ export async function mountNotes(root, ctx) {
     render();
   }
 
-  // Reloads what is on screen: the counts, the open Sections (as many items as they show) and the results.
-  // A collapsed Section reloads when it opens again.
+  // Reloads what is on screen, all at once: the counts, the open Sections (as many items as they show) and the
+  // results. A collapsed Section reloads when it opens again. A call while one runs makes it go once more.
+  let refreshing = null;
+  let refreshAgain = false;
   async function refresh() {
-    await loadSections();
-    const jobs = [];
+    if (refreshing) {
+      refreshAgain = true;
+      return refreshing;
+    }
+    let finish;
+    refreshing = new Promise((resolve) => {
+      finish = resolve;
+    }); // set before the first render below, so no poll is armed meanwhile
+    try {
+      do {
+        refreshAgain = false;
+        await refreshOnce();
+      } while (refreshAgain);
+    } finally {
+      refreshing = null;
+      finish();
+      schedulePoll(); // held back while the refresh ran: it brought the fresh state itself
+    }
+  }
+
+  async function refreshOnce() {
+    render(); // a group for every Section known so far, so the open ones load alongside the counts
+    const started = new Set();
+    const jobs = [loadSections()];
     for (const g of groups.values()) {
-      if (state.expanded.has(g.slug) || g === overdue) jobs.push(loadGroup(g, true, Math.max(PAGE, g.items.length), true));
-      else {
+      if (state.expanded.has(g.slug) || g === overdue) {
+        started.add(g);
+        jobs.push(loadGroup(g, true, Math.max(PAGE, g.items.length), true));
+      } else {
         g.ticket += 1; // an expand load still in flight answers from before the change
         g.loading = false;
         g.loaded = false;
@@ -297,6 +357,11 @@ export async function mountNotes(root, ctx) {
     const query = search.value.trim();
     if (query) jobs.push(runSearch(query));
     await Promise.all(jobs);
+    // An open Section the page only learnt of from the reply above (a first launch) loads now.
+    const late = [...groups.values()].filter(
+      (g) => state.expanded.has(g.slug) && !started.has(g) && !g.loaded && !g.loading,
+    );
+    await Promise.all(late.map((g) => loadGroup(g, true)));
   }
 
   // --- the Owner's taps ------------------------------------------------------
@@ -316,6 +381,7 @@ export async function mountNotes(root, ctx) {
     if (statusOf(g.slug) === value) return;
     haptic("select");
     state.status.set(g.slug, value);
+    g.loaded = false; // the other Status's kept list, if any, shows at once
     loadGroup(g, true);
     render();
   }
@@ -350,11 +416,13 @@ export async function mountNotes(root, ctx) {
 
   // --- overlays: the item view and the Section form --------------------------
 
-  function openItem(item) {
+  // `fresh`: the item was fetched just now, so the view need not ask for it again.
+  function openItem(item, fresh = false) {
     state.overlay = openDetail({
       list: main,
       host: overlay,
       item,
+      fresh,
       sections: state.sections,
       changed: itemChanged,
       deleted: itemDeleted,
@@ -390,6 +458,7 @@ export async function mountNotes(root, ctx) {
   // An item keeps its place while it still fits a Section's list and leaves it once not; the refresh that follows
   // brings it into the lists it moved to and corrects the counts.
   function itemChanged(updated) {
+    localGen += 1;
     for (const g of groups.values()) {
       const at = g.items.findIndex((item) => item.id === updated.id);
       if (at < 0) continue;
@@ -407,6 +476,7 @@ export async function mountNotes(root, ctx) {
   }
 
   function itemDeleted(id) {
+    localGen += 1;
     for (const g of groups.values()) {
       const before = g.items.length;
       g.items = g.items.filter((item) => item.id !== id);
@@ -429,19 +499,64 @@ export async function mountNotes(root, ctx) {
 
   // --- pending items and coming back to the app --------------------------------
 
+  // Only the pending Items shown are asked about, less often each time; one that settles brings a refresh,
+  // since the Classifier may have filed it elsewhere.
   let pollTimer = 0;
+  let pollStep = 0;
+  let polling = false;
+  let localGen = 0; // bumps on each change made here: a poll reply sent before one is stale
   function schedulePoll() {
     clearTimeout(pollTimer);
-    if (state.overlay || drag || !ctx.isCurrent() || isHalted() || document.visibilityState !== "visible") return;
+    if (refreshing || state.overlay || drag || !ctx.isCurrent() || isHalted()) return;
+    if (document.visibilityState !== "visible") return;
     const shown = searching()
       ? state.results.items
       : [...groups.values()].filter((g) => state.expanded.has(g.slug)).flatMap((g) => g.items);
-    if (shown.some((item) => item.enrichment_status === "pending")) pollTimer = setTimeout(refresh, PENDING_POLL_MS);
+    const pending = shown.filter((item) => item.enrichment_status === "pending");
+    if (!pending.length) {
+      pollStep = 0;
+      return;
+    }
+    let delay = pollDelay(pollStep);
+    const retry = Math.min(...pending.map((item) => parseTs(item.next_enrich_at)?.getTime() ?? 0));
+    if (retry - Date.now() > delay) delay = Math.min(retry - Date.now() + RETRY_SLACK_MS, 2 ** 31 - 1);
+    const ids = [...new Set(pending.map((item) => item.id))].slice(0, MAX_CHUNK); // what the server takes at once
+    pollTimer = setTimeout(() => pollPending(ids), delay);
+  }
+
+  async function pollPending(ids) {
+    if (polling) return;
+    polling = true;
+    pollStep += 1;
+    const gen = localGen;
+    let data = null;
+    try {
+      data = await api("/notes/items?" + new URLSearchParams(ids.map((id) => ["ids", String(id)])));
+    } catch (error) {
+      if (error instanceof AuthError) handleError(error); // anything else: the next tick asks again
+    } finally {
+      polling = false;
+    }
+    if (!data || gen !== localGen) {
+      schedulePoll(); // a change made meanwhile brings its own refresh
+      return;
+    }
+    const back = new Map(data.items.map((item) => [item.id, item]));
+    if (ids.some((id) => back.get(id)?.enrichment_status !== "pending")) {
+      pollStep = 0;
+      refresh();
+      return;
+    }
+    for (const g of groups.values()) g.items = g.items.map((item) => back.get(item.id) ?? item);
+    if (state.results) state.results.items = state.results.items.map((item) => back.get(item.id) ?? item);
+    render();
   }
 
   // Back in the app after sending something in the chat: show what arrived meanwhile.
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "visible" && ctx.isCurrent() && !state.overlay && !drag) refresh();
+    if (document.visibilityState !== "visible" || !ctx.isCurrent() || state.overlay || drag) return;
+    pollStep = 0;
+    refresh();
   });
 
   // --- drag and drop (edit mode) ---------------------------------------------
@@ -539,6 +654,7 @@ export async function mountNotes(root, ctx) {
     orderGen += 1;
     try {
       await api("/notes/sections/order", { method: "PUT", body: { ids: next.map((section) => section.id) } });
+      keepSnapshot("sections", { sections: next });
       haptic("success");
     } catch (error) {
       state.sections = before;
@@ -554,6 +670,7 @@ export async function mountNotes(root, ctx) {
 
   // --- the tab ---------------------------------------------------------------
 
+  // Once the Sections are known (kept from the last launch), the tab shows at once and the refresh runs behind it.
   async function show(arg = {}) {
     state.after = null;
     if (arg.expand) {
@@ -565,14 +682,17 @@ export async function mountNotes(root, ctx) {
       searchTicket += 1;
       state.expanded.add(arg.expand);
       state.status.set(arg.expand, "todo");
-      await refresh();
-      state.after = () => groups.get(arg.expand)?.node.scrollIntoView({ block: "start" });
-      return;
     }
-    await refresh();
-    if (arg.itemId) {
-      const item = await attempt(() => api(`/notes/items/${arg.itemId}`));
-      if (item) state.after = () => openItem(item);
+    // the chat's ✏️ asks for one Item: it is fetched alongside the lists, never after them
+    const wanted = arg.itemId ? attempt(() => api(`/notes/items/${arg.itemId}`)) : null;
+    const loading = refresh();
+    const unknown = arg.expand && !state.sections.some((section) => section.slug === arg.expand);
+    if (!state.sections.length || unknown) await loading; // the Section to open must exist before the scroll
+    if (arg.expand) {
+      state.after = () => groups.get(arg.expand)?.node.scrollIntoView({ block: "start" });
+    } else if (wanted) {
+      const item = await wanted;
+      if (item) state.after = () => openItem(item, true);
     }
   }
 

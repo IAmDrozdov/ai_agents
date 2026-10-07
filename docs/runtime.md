@@ -9,7 +9,7 @@ the notes path or the deploy. Shorthand: `telegram_bot/x.py` and `handlers/x.py`
 
 | Service | Entry point | Does | Reads / writes |
 |---|---|---|---|
-| `bot` | `telegram-bot` (`telegram_bot/__main__.py`) | Telegram long polling. Answers users, prices cards, runs one job at a time (`worker.worker_loop`), and runs notes enrichment plus the notes sweeper, show loop and reminder loop | `telegram_bot.sqlite3` rw, `notes.sqlite3` rw, OpenAI, YouTube, the web |
+| `bot` | `telegram-bot` (`telegram_bot/__main__.py`) | Telegram long polling. Answers users, prices cards, runs one job at a time (`worker.worker_loop`), and runs notes enrichment plus the notes sweeper, show loop, reminder loop and, once per start, the Thumbnail backfill | `telegram_bot.sqlite3` rw, `notes.sqlite3` rw, OpenAI, YouTube, the web |
 | `miniapp` | `telegram-miniapp` (`telegram_bot/miniapp`) | The admin Mini App: a public static shell plus a signed JSON API for notes and usage, `127.0.0.1:8083` (ADR-016) | `telegram_bot.sqlite3` read, `notes.sqlite3` rw |
 | `funnel` (profile) | `tailscale/tailscale` | Publishes `miniapp` over HTTPS through Tailscale Funnel, outbound only (ADR-016) | `tsstate` volume |
 | `warp` (profile) | wireproxy | SOCKS5 egress for yt-dlp only (ADR-014) | — |
@@ -128,6 +128,15 @@ the `miniapp` service through the funnel sidecar: a static shell (`miniapp/stati
 that calls `/api/usage` and `/api/notes/*`. It has two tabs and a ⚙️ button; each tab is mounted
 once per launch and keeps its state in memory until the app closes.
 
+Funnel costs 250–450 ms a request, so the app is built to need few requests (ADR-019):
+- **Shell and assets.** The shell `/` is revalidated on every launch (ETag = a hash of the shell). Assets live
+  under `/static/<build>/` and are cached for good. All modules load in one round trip
+  (`modulepreload`).
+- **Compression.** Responses over 500 B are gzipped.
+- **Snapshot.** The last answers are kept on the phone (`DeviceStorage`, else `localStorage`: Telegram Web answers DeviceStorage `UNSUPPORTED`;
+  `core.js` snapshots). The Dashboard, the Sections and the open lists paint from them at once,
+  then refresh behind them.
+
 - **Дашборд** (first) is infographics only (`GET /api/notes/dashboard?tz=<IANA zone>`): the todo
   count with «просрочено: N» beside it when anything is Overdue, two 26-week heatmaps of Items
   Captured and done per day (days in the Owner's time zone, from `created_at` and `done_at`), and a
@@ -150,9 +159,12 @@ once per launch and keeps its state in memory until the app closes.
 The item view (`detail.js`) edits an item (Sections, Annotation, «✓ Готово» / «↩ Вернуть», which
 also sets or clears `done_at`, and the Due: «+ Напомнить» reveals a date-time input, «×» removes it,
 a past moment is a 422), re-enriches, and deletes it at once behind a confirm; it reports each
-change back, and the accordion refreshes its counts and open lists. While an item on screen is still
-being enriched the app checks back every 3 s, and it reloads the shown tab when it becomes visible
-again; there is no push. "💬 Показать в чате" sets `show_requested_at` and closes the app; the bot's
+change back, and the accordion refreshes its counts and open lists, all in parallel. While an item
+on screen is still being enriched, the app asks about that item alone (`/api/notes/items?ids=`). The
+gap grows 3 s → 30 s, or lasts until its scheduled retry. Once it settles, the lists refresh.
+The app also reloads the shown tab when it becomes visible again; there is no push. A card's
+picture is the Item's Thumbnail (`/api/notes/items/{id}/thumb?v=<etag>`, notes ADR-0012), never a
+third-party URL. "💬 Показать в чате" sets `show_requested_at` and closes the app; the bot's
 show loop (`NotesRuntime.start_show_loop`, every 2 s) replies to the Item's original message, or sends
 the file again by `file_id` if that message is gone (notes ADR-0008). Enrichment files an Item only
 while it is in Other alone; once it is anywhere else, re-enrich keeps its Sections.
@@ -203,6 +215,10 @@ up anything left `pending` from sqlite.
 
 - **Droplet:** 1 vCPU, 961 MB RAM plus 2 GB swap. Memory caps are bot 700 MB, miniapp 160 MB,
   funnel 96 MB and warp 64 MB; together they exceed RAM, so keep new services small.
+- **Funnel:** the Mini App's name resolves to three ingress IPs, picked at random per connection,
+  and they differ a lot. Measured 2026-10-07 (TLS handshake, 5 samples each): `185.40.234.55` 0.11 s,
+  `.198` 0.45–0.77 s, `.75` 3.9–5.3 s. A slow launch can be the ingress, not the app (ADR-019).
+  Compare with `curl --resolve <host>:443:<ip> -w '%{time_appconnect}'`.
 - **YouTube:** metadata and audio from the droplet IP need `warp`. oEmbed, the Instagram embed
   page and TikTok oEmbed work directly.
 - **Telegram:** at most one poller per token. Running `telegram-bot` locally while production

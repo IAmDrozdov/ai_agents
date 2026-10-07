@@ -2,7 +2,7 @@
 // state while another is shown; «Расходы» opens over the tabs and Telegram's back button returns.
 
 import { OVERDUE } from "./cards.js";
-import { el, handleError, isHalted, prepareShell, setBack, showMessage, tg } from "./core.js";
+import { el, handleError, isHalted, loadSnapshots, prepareShell, setBack, showMessage, tg } from "./core.js";
 import { mountDashboard, reportZone } from "./dashboard.js";
 import { mountNotes } from "./notes.js";
 import { mountUsage } from "./usage.js";
@@ -12,7 +12,7 @@ const TABS = [
   { id: "notes", label: "Заметки", mount: mountNotes },
 ];
 
-function boot() {
+async function boot() {
   if (!tg?.initData) {
     showMessage("Открой приложение из Telegram: кнопка 📒 в чате с ботом.");
     return;
@@ -107,6 +107,8 @@ function boot() {
   gear.setAttribute("aria-label", "Расходы");
   gear.onclick = openUsage;
   tabs.append(gear);
+
+  await loadSnapshots(); // the last launch's answers: the first tab paints from them, then revalidates
 
   // The ✏️ Открыть button in the chat launches the app with ?item=<id>.
   const item = new URLSearchParams(location.search).get("item");

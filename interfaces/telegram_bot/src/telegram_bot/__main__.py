@@ -90,6 +90,7 @@ async def _run() -> None:
             notes.start_sweeper(bot)
             notes.start_show_loop(bot)
             notes.start_reminder_loop(bot)
+            notes.start_thumb_backfill()
 
     dp.startup.register(on_startup)
     await dp.start_polling(bot)

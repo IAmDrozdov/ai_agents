@@ -41,6 +41,13 @@ change is not done until, at 320 and 393 px, every tab has `scrollWidth == clien
 form control computes to at least 16 px, and a `PerformanceObserver` on `layout-shift` reads 0
 while a chip, filter or status is tapped.
 
+The build hash is computed at startup, so restart the server after editing a static file
+(ADR-019). To see the request waterfall the way the phone does, turn on the MCP's "Fast 3G" (about
+560 ms a request, near Funnel's cost). Read `performance.getEntriesByType('resource')`: a warm reload
+should show every `/static/<build>/` file with `deliveryType: "cache"`, and the first paint before
+the API answers (the snapshot). `curl -sI .../static/<build>/app.js` should say `immutable`, and
+`/` should say `no-cache` with an ETag.
+
 ## 3. Offline bot harness (routing, cards, callbacks, no token)
 
 Drive the real `Dispatcher` with synthetic updates and a recording session. This covers "who
@@ -116,7 +123,9 @@ $G ssh "$C exec -T bot notes-smoke https://youtu.be/dQw4w9WgXcQ"
   Run it via `$C exec -T bot python -`.
 - **Mini App:** on the droplet (outside your tailnet, so it is the public path), `curl -fsS
   $BOT_MINIAPP_URL/healthz` must answer and `/api/usage` without a header must be 401.
-  `docker stats --no-stream` should sit inside the memory caps.
+  `docker stats --no-stream` should sit inside the memory caps. The bot gives Items without a Thumbnail one at
+  every start (`notes: thumbnail backfill {'made': …}` in its log). `$C exec -T bot notes-thumbs`
+  runs the same pass by hand.
 - **Rollback point:** a deploy that changes the image tags the one that was running as
   `ai_agents:previous`. To roll back, run `docker tag ai_agents:previous ai_agents:latest && $C up -d` on the droplet. Tag a
   manual `ai_agents:rollback-<n>` only to keep a point across more than one deploy, and take a

@@ -22,6 +22,7 @@ from notes.domain import items
 from notes.domain import settings as settings_store
 from notes.domain.items import Item
 from notes.domain.urls import extract_urls
+from notes.enrich import thumbnail
 from notes.enrich.http import AiohttpClient, HttpClient
 from notes.enrich.pipeline import Notify, enrich_item
 from notes.enrich.voice import Download, VoiceRejected, VoiceUnavailable
@@ -93,6 +94,18 @@ class NotesRuntime:
                 download=telegram_download(bot),
             )
         )
+
+    def start_thumb_backfill(self) -> None:
+        """Give Items without a Thumbnail one, once per start: a deploy or a restored Backup heals itself."""
+        self.spawn(self._thumb_backfill())
+
+    async def _thumb_backfill(self) -> None:
+        try:
+            counts = await thumbnail.backfill(self.db, self.http)
+        except Exception:
+            log.exception("notes: thumbnail backfill failed")
+            return
+        log.info("notes: thumbnail backfill %s", counts)
 
     def start_show_loop(self, bot: Bot) -> None:
         self.spawn(self._show_loop(bot))

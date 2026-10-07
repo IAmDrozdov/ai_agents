@@ -9,6 +9,7 @@ import {
   handleError,
   haptic,
   isHalted,
+  pollDelay,
   setBack,
   setText,
   slot,
@@ -29,7 +30,6 @@ import {
   toLocalInput,
 } from "./cards.js";
 
-const PENDING_POLL_MS = 3000;
 // The item fields the top of the item view shows; it is rebuilt only when one of them changes.
 const HEAD_FIELDS = [
   "kind", "url", "title", "text", "source", "author", "gist", "file_name",
@@ -37,9 +37,9 @@ const HEAD_FIELDS = [
   "transcript", "sender", "duration_s", "tg_message_id",
 ]; // prettier-ignore
 
-// Shows `item` in `host` instead of `list`. hooks: sections (all, in order), changed(item), deleted(id), closed(),
-// visible() (false once the tab is left). Returns { close }.
-export function openDetail({ list, host, item, ...hooks }) {
+// Shows `item` in `host` instead of `list`; `fresh` skips the first re-fetch. hooks: sections (all, in order),
+// changed(item), deleted(id), closed(), visible() (false once the tab is left). Returns { close }.
+export function openDetail({ list, host, item, fresh = false, ...hooks }) {
   const state = {
     detail: item,
     open: true,
@@ -49,6 +49,7 @@ export function openDetail({ list, host, item, ...hooks }) {
     dueOpen: false, // «+» was tapped and no Due is saved yet
   };
   let pollTimer = 0;
+  let pollStep = 0;
   const listScroll = window.scrollY;
   const parts = build();
   sync(item);
@@ -57,7 +58,7 @@ export function openDetail({ list, host, item, ...hooks }) {
   setBack(close);
   window.scrollTo(0, 0);
   document.addEventListener("visibilitychange", onReturn);
-  freshen();
+  if (!fresh) freshen(); // a list copy can be minutes old
 
   function close() {
     if (!state.open) return;
@@ -91,16 +92,19 @@ export function openDetail({ list, host, item, ...hooks }) {
     }
   }
 
-  // Enrichment settles within seconds: while the item is still pending, check back quietly.
+  // Enrichment usually settles within seconds: while the item is still pending, check back quietly, less often each time.
   function schedulePoll() {
     clearTimeout(pollTimer);
     if (!state.open || !hooks.visible() || isHalted() || document.visibilityState !== "visible") return;
-    if (state.detail.enrichment_status === "pending") {
-      pollTimer = setTimeout(async () => {
-        await freshen();
-        schedulePoll();
-      }, PENDING_POLL_MS);
+    if (state.detail.enrichment_status !== "pending") {
+      pollStep = 0;
+      return;
     }
+    pollTimer = setTimeout(async () => {
+      pollStep += 1;
+      await freshen();
+      schedulePoll();
+    }, pollDelay(pollStep));
   }
 
   function onReturn() {

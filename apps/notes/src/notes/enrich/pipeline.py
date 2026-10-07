@@ -19,6 +19,7 @@ from notes.classify.port import (
 from notes.db import Database
 from notes.domain import items, sections, settings
 from notes.domain.items import Item
+from notes.enrich import thumbnail
 from notes.enrich.http import FetchError, HttpClient
 from notes.enrich.providers import Fetched, bare_host, fetch_for, is_youtube, youtube
 from notes.enrich.voice import Download, VoiceRejected, VoiceUnavailable, transcript_for
@@ -169,6 +170,11 @@ async def _enrich_item(
         image = await asyncio.to_thread(items.get_preview, db, item.id)
     elif fetched is not None:
         image = await load_image(http, fetched.image_url)
+    if image is not None:  # before classifying: a failed Filing still leaves the card its picture
+        try:
+            await asyncio.to_thread(thumbnail.save, db, item.id, image[0])
+        except Exception:  # a Thumbnail is optional: never let it hold up the Filing
+            log.exception("item %s: could not keep its thumbnail", item.id)
     known = await asyncio.to_thread(sections.list_sections, db)
     zone_name = await asyncio.to_thread(settings.get_zone, db)
     request = build_request(item, fetched, known, image, transcript, zone_name)

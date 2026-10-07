@@ -1,6 +1,6 @@
 // Дашборд: todo headline, two day heatmaps on one scale, Section bars. Only a Section bar and «просрочено» are tappable.
 
-import { api, attempt, el, setText, slot } from "./core.js";
+import { api, attempt, el, keepSnapshot, setText, slot, snapshot } from "./core.js";
 
 const SVG = "http://www.w3.org/2000/svg";
 const CELL = 11;
@@ -153,13 +153,21 @@ export async function mountDashboard(root, ctx) {
   root.replaceChildren(dash.node);
   let ticket = 0; // a slower, older reply must not overwrite a newer one
 
+  // Paints the last launch's figures at once when there are any, then the fresh ones.
   async function show() {
     const mine = ++ticket;
-    const [board, sections] = await Promise.all([
+    const kept = [snapshot("dashboard"), snapshot("sections")];
+    if (kept[0] && kept[1]) dash.update(kept[0], kept[1].sections);
+    const fresh = Promise.all([
       attempt(() => api("/notes/dashboard?" + new URLSearchParams({ tz: TIMEZONE }))),
       attempt(() => api("/notes/sections")),
-    ]);
-    if (mine === ticket && board && sections) dash.update(board, sections.sections);
+    ]).then(([board, sections]) => {
+      if (!board || !sections || mine !== ticket) return;
+      keepSnapshot("dashboard", board);
+      keepSnapshot("sections", sections);
+      dash.update(board, sections.sections);
+    });
+    if (!kept[0] || !kept[1]) await fresh;
   }
 
   // Back in the app after sending something in the chat: the figures move.

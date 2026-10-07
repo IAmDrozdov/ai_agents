@@ -10,8 +10,6 @@ export const itemTitle = (item) =>
   item.title || item.url || item.file_name || item.text || (item.kind === "voice" ? "🎤 Голосовое" : "Без названия");
 export const originOf = (item) =>
   [item.source, item.author, item.sender && "↪️ " + item.sender].filter(Boolean).join(" · ");
-const hasPreview = (item) =>
-  item.kind === "file" || (item.kind === "voice" && (item.file_mime || "").startsWith("video/"));
 
 export function fmtDuration(seconds) {
   const s = Math.max(0, Math.round(seconds || 0));
@@ -69,18 +67,12 @@ export function enrichmentBadge(item) {
 export function card(item, opts) {
   const node = el("article", "card clickable");
   node.onclick = () => opts.open(item);
-  if (isHttp(item.image_url)) {
-    const img = el("img", "thumb");
-    img.alt = "";
-    img.loading = "lazy";
-    img.referrerPolicy = "no-referrer";
-    img.src = item.image_url;
-    node.append(img);
-  } else if (hasPreview(item)) {
+  if (item.thumb) {
+    // the etag in the URL lets the webview keep the picture across launches (notes ADR-0012)
     const img = el("img", "thumb");
     img.alt = "";
     node.append(img);
-    apiImageUrl(`/notes/items/${item.id}/preview`).then((url) => {
+    apiImageUrl(`/notes/items/${item.id}/thumb?v=${item.thumb}`).then((url) => {
       if (url) img.src = url;
       else img.remove();
     });

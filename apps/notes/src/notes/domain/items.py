@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import sqlite3
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -26,6 +27,9 @@ SEARCH_COLUMNS = (
 )  # fmt: skip
 
 TIMESTAMP = "%Y-%m-%d %H:%M:%S"
+ITEM_SELECT = (
+    "SELECT items.*, (SELECT etag FROM item_thumbs WHERE item_id = items.id) AS thumb FROM items"
+)
 BACKOFF = (
     timedelta(minutes=1),
     timedelta(minutes=5),
@@ -78,6 +82,7 @@ class Item:
     created_at: str
     updated_at: str
     sections: tuple[Section, ...]
+    thumb: str | None = None  # the stored Thumbnail's etag
 
     def is_overdue(self, now: datetime | None = None) -> bool:
         """Todo with a Due that has passed: read off the clock, never stored (ADR-0011)."""
@@ -103,6 +108,7 @@ class ItemFilter:
     tz: str = "UTC"
     text: str = ""
     overdue: bool = False  # only Overdue Items (ADR-0011); implies todo and spans every Section
+    ids: tuple[int, ...] = ()  # only these Items
 
 
 @dataclass(frozen=True)
@@ -174,11 +180,12 @@ def _row_to_item(conn: sqlite3.Connection, row: sqlite3.Row) -> Item:
         created_at=row["created_at"],
         updated_at=row["updated_at"],
         sections=_sections_of(conn, int(row["id"])),
+        thumb=row["thumb"],
     )
 
 
 def _fetch(conn: sqlite3.Connection, item_id: int) -> Item:
-    row = conn.execute("SELECT * FROM items WHERE id=?", (item_id,)).fetchone()
+    row = conn.execute(f"{ITEM_SELECT} WHERE id=?", (item_id,)).fetchone()
     if row is None:
         raise KeyError(item_id)
     return _row_to_item(conn, row)
@@ -306,6 +313,41 @@ def get_preview(db: Database, item_id: int) -> tuple[bytes, str] | None:
     return (bytes(row["data"]), row["mime"]) if row else None
 
 
+def store_thumb(db: Database, item_id: int, data: bytes, mime: str) -> bool:
+    """Keep the Item's Thumbnail, replacing an older one; False if the Item is gone."""
+    etag = hashlib.sha256(data).hexdigest()[:16]
+    with db.session() as conn:
+        # One statement: an Item deleted meanwhile simply matches nothing.
+        return (
+            conn.execute(
+                "INSERT INTO item_thumbs(item_id, mime, etag, data) "
+                "SELECT id, ?, ?, ? FROM items WHERE id=? "
+                "ON CONFLICT(item_id) DO UPDATE SET mime=excluded.mime, etag=excluded.etag, "
+                "data=excluded.data",
+                (mime, etag, data, item_id),
+            ).rowcount
+            > 0
+        )
+
+
+def get_thumb(db: Database, item_id: int) -> tuple[bytes, str, str] | None:
+    """The Item's Thumbnail as (bytes, mime, etag), or None."""
+    with db.session(readonly=True) as conn:
+        row = conn.execute(
+            "SELECT data, mime, etag FROM item_thumbs WHERE item_id=?", (item_id,)
+        ).fetchone()
+    return (bytes(row["data"]), row["mime"], row["etag"]) if row else None
+
+
+def missing_thumbs(db: Database) -> list[Item]:
+    """Items that have no Thumbnail yet, oldest first."""
+    with db.session(readonly=True) as conn:
+        rows = conn.execute(
+            f"{ITEM_SELECT} WHERE id NOT IN (SELECT item_id FROM item_thumbs) ORDER BY id"
+        ).fetchall()
+        return [_row_to_item(conn, row) for row in rows]
+
+
 def capture_link(
     db: Database,
     url: str,
@@ -333,7 +375,7 @@ def capture_link(
                 (item_id, other_id(db)),
             )
             return Capture(_fetch(conn, item_id), "new")
-        row = conn.execute("SELECT * FROM items WHERE url_normalized=?", (key,)).fetchone()
+        row = conn.execute(f"{ITEM_SELECT} WHERE url_normalized=?", (key,)).fetchone()
         return Capture(_row_to_item(conn, row), "existing")
 
 
@@ -559,6 +601,9 @@ def local_midnight_utc(day: date, tz: str) -> str:
 def _where(flt: ItemFilter, now: datetime | None = None) -> tuple[str, list[object]]:
     clauses = ["1"]
     params: list[object] = []
+    if flt.ids:
+        clauses.append(f"id IN ({','.join('?' * len(flt.ids))})")
+        params.extend(flt.ids)
     if flt.overdue:
         clauses.append("status='todo' AND due_at IS NOT NULL AND due_at <= ?")
         params.append(stamp(now))
@@ -603,7 +648,7 @@ def query(
     with db.session(readonly=True) as conn:
         total = int(conn.execute(f"SELECT COUNT(*) FROM items WHERE {where}", params).fetchone()[0])
         rows = conn.execute(
-            f"SELECT * FROM items WHERE {where} ORDER BY {order} LIMIT ? OFFSET ?",
+            f"{ITEM_SELECT} WHERE {where} ORDER BY {order} LIMIT ? OFFSET ?",
             [*params, limit, offset],
         ).fetchall()
         return Page(items=[_row_to_item(conn, row) for row in rows], total=total)
