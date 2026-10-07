@@ -23,6 +23,7 @@ Monorepo of local AI workflows exposed through one job contract (`shared.job`, A
 - Domain terms -> `CONTEXT.md`
 - New ADR -> `docs/decisions/NNN-title.md`
 - Deploy bot to droplet -> `.claude/skills/deploy-bot/SKILL.md` (slash: `/deploy-bot`)
+- Backup / restore -> `infrastructure/README.md` "Backups", `docs/decisions/018-daily-backup-pulled-to-the-owners-mac.md`
 - Change the bot's routing, cards or buttons -> `docs/runtime.md` (routing table, card lifecycle), then `docs/verifying.md` §3
 - Live test in the real chat (last rung, owner-approved script) -> `.claude/skills/live-test/SKILL.md` (slash: `/live-test`)
 - Add an env var or a service -> `docs/runtime.md` "Touch points"

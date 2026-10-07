@@ -174,3 +174,6 @@ up anything left `pending` from sqlite.
   page and TikTok oEmbed work directly.
 - **Telegram:** at most one poller per token. Running `telegram-bot` locally while production
   is up causes 409 Conflict. Occasional `Bad Gateway` lines in the log are Telegram-side noise.
+- **Data:** the databases live only in the `appdata` volume, and the File and Voice bytes only in
+  Telegram. The Owner's Mac pulls a daily Backup of both into iCloud Drive (ADR-018;
+  `infrastructure/README.md` "Backups", with the restore procedure).

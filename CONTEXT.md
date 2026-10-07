@@ -40,5 +40,7 @@ product vocabulary.
 - **Mini App** — the admin's Telegram Mini App (`telegram_bot/miniapp`, ADR-016): a static shell
   plus a JSON API over notes and usage, opened from the 📒 menu button. Every API call carries
   Telegram-signed **initData**, and only `ADMIN_TELEGRAM_ID` passes.
+- **Backup** — one day's off-droplet copy of everything the bot keeps: both databases, the bytes
+  of every notes File and Voice, and a manifest. Say Backup, not dump, snapshot or export.
 - **Settings vs Config** — `shared.config.Settings` is env/secrets; `<Name>Config`
   is workflow behaviour with code defaults (ADR-004).

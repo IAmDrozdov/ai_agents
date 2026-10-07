@@ -158,16 +158,68 @@ It only shows "open from Telegram" there: the API accepts nothing but signed ini
 
 ```bash
 G=./infrastructure/ssh-gate.sh
-IP=$(terraform -chdir=infrastructure/terraform output -raw droplet_ipv4)
 $G ssh 'docker compose -f /opt/ai_agents/src/infrastructure/docker/docker-compose.yml logs -f bot'
-# sqlite backup:
-$G ssh 'cat $(docker volume inspect -f "{{.Mountpoint}}" docker_appdata)/telegram_bot.sqlite3' > backup.sqlite3
-# notes run in WAL mode with two writers, so take a consistent snapshot instead of copying the file:
-# (from the volume on the host: `docker cp` cannot read a container's tmpfs /tmp)
-$G ssh 'V=$(docker volume inspect -f "{{.Mountpoint}}" docker_appdata); python3 -c "import sqlite3,sys; s=sqlite3.connect(sys.argv[1]); d=sqlite3.connect(sys.argv[2]); s.backup(d); d.close()" $V/notes.sqlite3 /root/notes-backup.sqlite3'
-$G run scp ${SSH_KEY:+-i "$SSH_KEY"} root@$IP:/root/notes-backup.sqlite3 ./notes-backup.sqlite3
-$G ssh 'rm /root/notes-backup.sqlite3'   # do not leave copies of the data in /root
 ```
+
+Never copy the databases by hand: they are WAL with two writers, and sqlite run as root on the
+host can leave root-owned side files that lock the bot out. Take a Backup instead (below).
+
+## Backups
+
+The Owner's Mac pulls a daily **Backup** into iCloud Drive (ADR-018). Each Backup holds both
+databases, verified on arrival, plus the bytes of every notes File and Voice. The copies are taken
+by a one-off `docker compose run` container of the bot image, as its `app` user, so they work while
+the bot is down. Nothing else for it runs on the droplet.
+
+```bash
+SSH_KEY=~/.ssh/<key> uv run python infrastructure/backup.py run --force   # a Backup now, e.g. before a schema change
+SSH_KEY=~/.ssh/<key> uv run python infrastructure/backup.py install       # hourly and at login (launchd)
+uv run python infrastructure/backup.py uninstall
+```
+
+- **Where:** `~/Library/Mobile Documents/com~apple~CloudDocs/Backups/ai-agents/`, or
+  `AI_AGENTS_BACKUP_DIR`. It holds one `YYYY-MM-DD/` folder per day (`notes.sqlite3`,
+  `telegram_bot.sqlite3`, `manifest.json`) and one shared `files/` folder with
+  `<item id>-<file_id hash>-<name>.<ext>`. The hash is there because a restore hands out old Item ids
+  again. The newest 30 days are kept.
+- **Manifest:** checksums, integrity result and row counts per database. It also lists which Items
+  have bytes, what this run downloaded, and what is missing and why (`too_big` means over the Bot
+  API's 20 MB download limit).
+- **Runs:** without `--force`, a run does nothing once today's Backup exists. With it, a run waits
+  for one in progress and keeps today's earlier Backup as `YYYY-MM-DD-HHMMSS/`. `install` writes the
+  LaunchAgent `local.ai-agents.backup` for this machine, carrying over `SSH_KEY` and
+  `AI_AGENTS_BACKUP_DIR` from your shell.
+- **Log and alerts:** the log is `~/Library/Logs/ai-agents-backup.log`. A macOS banner plus the bot's
+  message "⚠️ ai_agents backup …" to the admin, at most once a day per reason, comes for:
+  - a failed run: from the second failure in a row, or at once when the last good Backup is over
+    48 hours old (one failure right after a wake, before the network is up, says nothing);
+  - a file that could not be fetched.
+
+  A schedule that stopped running cannot alert about itself: glance at the folder now and then.
+- **Offline check:** `NOTES_DB_PATH=… TELEGRAM_DB_PATH=… AI_AGENTS_BACKUP_DIR=<scratch> uv run python
+  infrastructure/backup.py run --source local` runs the whole pipeline on local databases. It sends
+  no bot message: it logs "would send" instead.
+
+**Restore** a chosen day. Files and voice messages are not put back: they stay plain files under
+`files/`, and the bot keeps serving them through their `file_id` while its token is the same.
+
+```bash
+G=./infrastructure/ssh-gate.sh
+C="docker compose -f /opt/ai_agents/src/infrastructure/docker/docker-compose.yml"
+D="$HOME/Library/Mobile Documents/com~apple~CloudDocs/Backups/ai-agents/<YYYY-MM-DD>"
+$G ssh "$C stop bot miniapp"                                           # 1. stop both writers
+for f in notes.sqlite3 telegram_bot.sqlite3; do                        # 2. put the copies in place
+  $G ssh "cd \$(docker volume inspect -f '{{.Mountpoint}}' docker_appdata) && cat > $f.restore \
+    && mv $f $f.before-restore && { [ ! -e $f-wal ] || mv $f-wal $f.before-restore-wal; } \
+    && rm -f $f-shm && mv $f.restore $f && chown 10001:10001 $f" < "$D/$f"
+done
+$G ssh "$C start bot miniapp"                                          # 3. start them again
+$G ssh "curl -fsS http://127.0.0.1:8083/healthz && $C logs --since 2m bot | grep 'polling as @'"  # 4.
+```
+
+Then open the Mini App and check the Items. Delete the `*.before-restore*` files on the volume once
+you are satisfied. The old `-wal` file moves with them: it belongs to the old database, and replaying
+it onto the restored file would corrupt it. `10001` is the container's `app` user.
 
 ## Teardown
 

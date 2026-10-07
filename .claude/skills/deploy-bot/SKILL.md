@@ -88,11 +88,10 @@ git stash            # or check out the last good commit
 git stash pop
 ```
 The sqlite volume (`/data/telegram_bot.sqlite3`, `/data/notes.sqlite3`) is untouched by
-deploys; users, settings, usage history and notes survive. `notes.sqlite3` is WAL with two
-writers, so back it up with the snapshot command in `infrastructure/README.md`. Back it up before schema-affecting changes:
+deploys; users, settings, usage history and notes survive. Before a schema-affecting change,
+take a Backup (ADR-018; `infrastructure/README.md` "Backups"). Never copy the WAL files by hand:
 ```bash
-./infrastructure/ssh-gate.sh ssh \
-  'cat $(docker volume inspect -f "{{.Mountpoint}}" docker_appdata)/telegram_bot.sqlite3' > backup.sqlite3
+SSH_KEY=~/.ssh/<key> uv run python infrastructure/backup.py run --force
 ```
 
 ## If a running job would be interrupted

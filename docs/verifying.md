@@ -114,8 +114,9 @@ $G ssh "$C exec -T bot notes-smoke https://youtu.be/dQw4w9WgXcQ"
   `docker stats --no-stream` should sit inside the memory caps.
 - **Rollback point:** a deploy that changes the image tags the one that was running as
   `ai_agents:previous`. To roll back, run `docker tag ai_agents:previous ai_agents:latest && $C up -d` on the droplet. Tag a
-  manual `ai_agents:rollback-<n>` only to keep a point across more than one deploy, and back up
-  the sqlite files before a schema change.
+  manual `ai_agents:rollback-<n>` only to keep a point across more than one deploy, and take a
+  Backup before a schema change (`SSH_KEY=… uv run python infrastructure/backup.py run --force`,
+  ADR-018).
 
 ## 5. Telegram Web (the real chat), then the owner
 
