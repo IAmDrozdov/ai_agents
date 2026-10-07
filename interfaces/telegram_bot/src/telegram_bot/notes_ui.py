@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from html import escape
 
 from aiogram import Bot
@@ -21,6 +22,7 @@ from aiogram.types import (
     WebAppInfo,
 )
 
+from notes.domain import items
 from notes.domain.items import Item
 from shared.config import settings
 from shared.obs import get_logger
@@ -75,6 +77,17 @@ async def acknowledge(bot: Bot, item: Item) -> None:
     )
 
 
+WEEKDAYS = ("пн", "вт", "ср", "чт", "пт", "сб", "вс")
+MONTHS = ("янв", "фев", "мар", "апр", "мая", "июн", "июл", "авг", "сен", "окт", "ноя", "дек")
+
+
+def format_due(due_at: str, zone: str) -> str:
+    """A stored UTC Due in the Owner's zone, as «пт, 10 окт, 19:00»."""
+    moment = datetime.strptime(due_at, items.TIMESTAMP).replace(tzinfo=UTC)
+    local = moment.astimezone(items.zone(zone))
+    return f"{WEEKDAYS[local.weekday()]}, {local.day} {MONTHS[local.month - 1]}, {local:%H:%M}"
+
+
 def miniapp_link(item_id: int) -> str | None:
     """The Mini App opened on one Item, or None when no Mini App URL is configured."""
     base = settings.bot_miniapp_url.strip()
@@ -120,6 +133,33 @@ async def send_reminder(bot: Bot, item: Item) -> bool:
     except TelegramAPIError as exc:
         log.warning("item %s: could not send the reminder: %s", item.id, exc)
     return True
+
+
+async def announce_due(bot: Bot, item: Item, zone: str, *, now: datetime | None = None) -> None:
+    """One line naming the Due a Capture became a Reminder with; a Due already past says nothing."""
+    chat = item.tg_chat_id
+    if chat is None or item.due_at is None or item.due_at <= items.stamp(now):
+        return
+    link = miniapp_link(item.id)
+    markup = (
+        InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text="📅 Перенести", web_app=WebAppInfo(url=link))]
+            ]
+        )
+        if link
+        else None
+    )
+    text = f"⏰ {format_due(item.due_at, zone)}"
+    reply = (
+        ReplyParameters(message_id=item.tg_message_id, allow_sending_without_reply=True)
+        if item.tg_message_id is not None
+        else None
+    )
+    try:
+        await bot.send_message(chat, text, reply_markup=markup, reply_parameters=reply)
+    except TelegramAPIError as exc:
+        log.warning("item %s: could not announce the Due: %s", item.id, exc)
 
 
 async def show_in_chat(bot: Bot, item: Item) -> None:

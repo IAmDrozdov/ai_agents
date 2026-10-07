@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+from datetime import datetime
 from typing import Any
 
 import openai
@@ -47,6 +48,19 @@ SYSTEM_PROMPT = """\
 переслал; не копируй его в author.
 - Сначала опирайся на слова владельца и описание. Картинку используй, когда описание пусто \
 или неясно; для профиля или файла без описания она может быть единственным источником.
+- due: момент, когда владельца надо напомнить об этом, по его местному времени в формате \
+YYYY-MM-DDTHH:MM; иначе null. Ставь due только если слова владельца или речь ясно просят \
+напомнить («напомни», «не забыть», «remind me»); «напомни» — сильный признак. Само упоминание \
+времени — не просьба: «встреча в 9 была скучной» → null. Отсчитывай от now (момент, когда \
+владелец это сохранил), в его часовом поясе zone:
+  · «через 2 часа», «через пару часов», «через 20 минут» — от now;
+  · только дата или день («завтра», «в пятницу», «10 октября») без часа — 09:00 этого дня; \
+день недели — ближайший такой день, считая со следующего;
+  · «утром» — 09:00, «днём» — 14:00, «вечером» — 19:00;
+  · просьба напомнить без даты и без часа («напомни купить молоко») — завтра в 09:00;
+  · час без даты («напомни в 9»): если он уже прошёл сегодня — этот час завтра;
+  · повторов нет: «каждый понедельник» — ближайший понедельник.
+  due всегда позже now.
 - confident: false, если по всему имеющемуся нельзя уверенно понять, о чём это, и начало речи \
 из видео помогло бы.
 """
@@ -57,6 +71,7 @@ class _Answer(BaseModel):
     gist: str
     title: str | None
     author: str | None
+    due: str | None
     confident: bool
 
 
@@ -75,7 +90,19 @@ def render_request(request: FilingRequest) -> str:
         "sender": request.sender,
     }
     sections = [{"slug": s.slug, "name": s.name, "hint": s.hint} for s in request.sections]
-    return json.dumps({"item": item, "sections": sections}, ensure_ascii=False, indent=1)
+    now = {"now": request.now_local, "zone": request.zone}
+    return json.dumps({"item": item, "sections": sections} | now, ensure_ascii=False, indent=1)
+
+
+def parse_due(value: str | None) -> datetime | None:
+    """The model's local wall-clock Due, or None when it is missing or not a datetime."""
+    if not value:
+        return None
+    try:
+        due = datetime.fromisoformat(value.strip())
+    except ValueError:
+        return None
+    return due.replace(tzinfo=None)
 
 
 class OpenAIClassifier:
@@ -112,6 +139,7 @@ class OpenAIClassifier:
             title=(answer.title or "").strip() or None,
             author=(answer.author or "").strip() or None,
             confident=answer.confident,
+            due=parse_due(answer.due),
         )
 
     async def _parse(self, request: FilingRequest) -> Any:

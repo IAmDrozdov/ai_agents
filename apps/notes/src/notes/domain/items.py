@@ -116,6 +116,20 @@ def stamp(now: datetime | None = None) -> str:
     return (now or datetime.now(UTC)).astimezone(UTC).strftime(TIMESTAMP)
 
 
+WEEKDAYS_RU = ("понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье")
+
+
+def local_to_utc(local: datetime, tz: str) -> datetime:
+    """A naive wall-clock moment in zone `tz` as an aware UTC moment."""
+    return local.replace(tzinfo=zone(tz)).astimezone(UTC)
+
+
+def local_clock(utc_stamp: str, tz: str) -> str:
+    """A stored UTC timestamp as the Owner's local clock with the weekday: «2026-10-07 20:58, среда»."""
+    moment = datetime.strptime(utc_stamp, TIMESTAMP).replace(tzinfo=UTC).astimezone(zone(tz))
+    return f"{moment:%Y-%m-%d %H:%M}, {WEEKDAYS_RU[moment.weekday()]}"
+
+
 def _sections_of(conn: sqlite3.Connection, item_id: int) -> tuple[Section, ...]:
     rows = conn.execute(
         "SELECT s.* FROM sections s JOIN item_sections i ON i.section_id = s.id "
@@ -367,9 +381,12 @@ def store_enrichment(
     caption: str | None = None,
     image_url: str | None = None,
     error: str | None = None,
+    due: datetime | None = None,
     now: datetime | None = None,
 ) -> Item:
     """Record what Enrichment found; the Classifier files the Item only while it is in Other alone.
+
+    A `due` (UTC) fills an empty Due and never replaces one (ADR-0011).
 
     Raises KeyError if the Item was deleted while it was being enriched.
     """
@@ -382,6 +399,11 @@ def store_enrichment(
         )
         if cur.rowcount == 0:
             raise KeyError(item_id)
+        if due is not None:
+            conn.execute(
+                "UPDATE items SET due_at=?, reminded_at=NULL WHERE id=? AND due_at IS NULL",
+                (stamp(due), item_id),
+            )
         if _in_other_alone(conn, item_id):
             _replace_sections(conn, item_id, sections)
         return _fetch(conn, item_id)

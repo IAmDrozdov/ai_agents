@@ -19,10 +19,11 @@ from notes.classify import make_classifier
 from notes.classify.port import Classifier
 from notes.db import Database
 from notes.domain import items
+from notes.domain import settings as settings_store
 from notes.domain.items import Item
 from notes.domain.urls import extract_urls
 from notes.enrich.http import AiohttpClient, HttpClient
-from notes.enrich.pipeline import enrich_item
+from notes.enrich.pipeline import Notify, enrich_item
 from notes.enrich.voice import Download, VoiceRejected, VoiceUnavailable
 from notes.sweeper import run_sweeper
 from shared.config import settings
@@ -70,13 +71,24 @@ class NotesRuntime:
         self.tasks.add(task)
         task.add_done_callback(self.tasks.discard)
 
+    def notify_for(self, bot: Bot) -> Notify:
+        """What Enrichment tells the chat: the reaction, and the Due line when it filled a Due."""
+
+        async def notify(item: Item, due_filled: bool) -> None:
+            await notes_ui.acknowledge(bot, item)
+            if due_filled:
+                zone = await asyncio.to_thread(settings_store.get_zone, self.db)
+                await notes_ui.announce_due(bot, item, zone)
+
+        return notify
+
     def start_sweeper(self, bot: Bot) -> None:
         self.spawn(
             run_sweeper(
                 self.db,
                 http=self.http,
                 classifier=self.classifier,
-                notify=lambda item: notes_ui.acknowledge(bot, item),
+                notify=self.notify_for(bot),
                 interval_s=max(settings.notes_enrich_sweep_seconds, 5),
                 download=telegram_download(bot),
             )
@@ -127,7 +139,7 @@ class NotesRuntime:
                 item_id,
                 http=self.http,
                 classifier=self.classifier,
-                notify=lambda item: notes_ui.acknowledge(bot, item),
+                notify=self.notify_for(bot),
                 download=telegram_download(bot),
             )
         )

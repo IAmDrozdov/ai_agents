@@ -17,7 +17,7 @@ from notes.classify.port import (
     SectionBrief,
 )
 from notes.db import Database
-from notes.domain import items, sections
+from notes.domain import items, sections, settings
 from notes.domain.items import Item
 from notes.enrich.http import FetchError, HttpClient
 from notes.enrich.providers import Fetched, bare_host, fetch_for, is_youtube, youtube
@@ -26,8 +26,9 @@ from shared.obs import get_logger
 
 log = get_logger(__name__)
 
-# Called with the stored Item once Enrichment lands, e.g. to update the Acknowledgement.
-Notify = Callable[[Item], Awaitable[None]]
+# Called with the stored Item once Enrichment lands, e.g. to update the Acknowledgement; the flag says
+# this Enrichment filled the Item's Due (ADR-0011).
+Notify = Callable[[Item, bool], Awaitable[None]]
 
 
 def build_request(
@@ -36,6 +37,7 @@ def build_request(
     known: list[sections.Section],
     image: tuple[bytes, str] | None = None,
     transcript: str | None = None,
+    zone_name: str = "UTC",
 ) -> FilingRequest:
     return FilingRequest(
         kind=item.kind,
@@ -50,6 +52,8 @@ def build_request(
         annotation=item.text,
         sender=item.sender,
         transcript=transcript,
+        now_local=items.local_clock(item.created_at, zone_name),
+        zone=zone_name,
         sections=[SectionBrief(slug=s.slug, name=s.name, hint=s.hint) for s in known],
     )
 
@@ -167,12 +171,13 @@ async def _enrich_item(
     elif fetched is not None:
         image = await load_image(http, fetched.image_url)
     known = await asyncio.to_thread(sections.list_sections, db)
-    request = build_request(item, fetched, known, image, transcript)
+    zone_name = await asyncio.to_thread(settings.get_zone, db)
+    request = build_request(item, fetched, known, image, transcript, zone_name)
     try:
         filing = await file_with_fallback(classifier, request, http)
     except ClassifierRefused as exc:
         log.warning("item %s: classifier refused: %s", item.id, exc)
-        updated = await _store_async(db, item, fetched, None, f"refused: {exc}", now)
+        updated = await _store_async(db, item, fetched, None, f"refused: {exc}", now, zone_name)
     except ClassifierRejected as exc:
         log.error("item %s: classifier rejected the request: %s", item.id, exc)
         await _record_failure(items.mark_failed, db, item.id, str(exc), now, notify)
@@ -186,9 +191,9 @@ async def _enrich_item(
         await _record_failure(items.schedule_retry, db, item.id, str(exc), now, notify)
         return
     else:
-        updated = await _store_async(db, item, fetched, filing, fetch_error, now)
+        updated = await _store_async(db, item, fetched, filing, fetch_error, now, zone_name)
     if updated is not None and notify is not None:
-        await notify(updated)
+        await notify(updated, _filled_due(item, updated, filing, zone_name))
 
 
 async def _record_failure(
@@ -206,7 +211,20 @@ async def _record_failure(
         log.info("item %s was deleted while it was being enriched", item_id)
         return
     if updated.enrichment_status == "failed" and notify is not None:
-        await notify(updated)
+        await notify(updated, False)
+
+
+def _due_of(item: Item, filing: Filing | None, zone_name: str) -> datetime | None:
+    """The Filing's Due as UTC; one that is not after the Capture moment is a misread and dropped."""
+    if filing is None or filing.due is None:
+        return None
+    due = items.local_to_utc(filing.due, zone_name)
+    return due if items.stamp(due) > item.created_at else None
+
+
+def _filled_due(item: Item, updated: Item, filing: Filing | None, zone_name: str) -> bool:
+    due = _due_of(item, filing, zone_name)
+    return due is not None and item.due_at is None and updated.due_at == items.stamp(due)
 
 
 async def _store_async(
@@ -216,9 +234,10 @@ async def _store_async(
     filing: Filing | None,
     error: str | None,
     now: datetime | None,
+    zone_name: str,
 ) -> Item | None:
     try:
-        return await asyncio.to_thread(_store, db, item, fetched, filing, error, now)
+        return await asyncio.to_thread(_store, db, item, fetched, filing, error, now, zone_name)
     except KeyError:  # the Owner deleted it meanwhile
         log.info("item %s was deleted while it was being enriched", item.id)
         return None
@@ -231,6 +250,7 @@ def _store(
     filing: Filing | None,
     error: str | None,
     now: datetime | None,
+    zone_name: str,
 ) -> Item:
     result = filing or Filing()
     return items.store_enrichment(
@@ -244,5 +264,6 @@ def _store(
         caption=fetched.caption if fetched else None,
         image_url=fetched.image_url if fetched else None,
         error=error,
+        due=_due_of(item, filing, zone_name),
         now=now,
     )

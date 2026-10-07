@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import re
+from datetime import datetime
+
 from notes.classify.port import Filing, FilingRequest
 
 GIST_LIMIT = 200
+# «напомни 2026-10-10 19:00»: the offline stand-in for the model reading a Due.
+REMIND = re.compile(r"напомни\s+(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2})", re.IGNORECASE)
 
 
 class FakeClassifier:
@@ -18,4 +23,13 @@ class FakeClassifier:
             or ""
         )
         gist = " ".join(text.split())[:GIST_LIMIT]
-        return Filing(sections=[], gist=gist, title=request.title, author=request.author)
+        return Filing(
+            sections=[], gist=gist, title=request.title, author=request.author, due=_due(request)
+        )
+
+
+def _due(request: FilingRequest) -> datetime | None:
+    for words in (request.annotation, request.transcript):
+        if match := REMIND.search(words or ""):
+            return datetime.strptime(" ".join(match.groups()), "%Y-%m-%d %H:%M")
+    return None
