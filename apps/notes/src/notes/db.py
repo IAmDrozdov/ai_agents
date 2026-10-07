@@ -42,6 +42,8 @@ CREATE TABLE IF NOT EXISTS {name} (
     tg_ack_message_id   INTEGER,
     tg_message_id       INTEGER,
     show_requested_at   TEXT,
+    due_at              TEXT,
+    reminded_at         TEXT,
     created_at          TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -67,6 +69,12 @@ CREATE INDEX IF NOT EXISTS items_done_at ON items(done_at) WHERE done_at IS NOT 
 CREATE INDEX IF NOT EXISTS items_enrich ON items(enrichment_status, next_enrich_at);
 CREATE INDEX IF NOT EXISTS items_show
     ON items(show_requested_at) WHERE show_requested_at IS NOT NULL;
+CREATE INDEX IF NOT EXISTS items_due ON items(due_at) WHERE due_at IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS settings (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 
 CREATE TABLE IF NOT EXISTS item_previews (
     item_id INTEGER PRIMARY KEY REFERENCES items(id) ON DELETE CASCADE,
@@ -118,7 +126,7 @@ def _rebuild_items(conn: sqlite3.Connection, select: Mapping[str, str] | None = 
 
 
 def _migrate_items(conn: sqlite3.Connection) -> None:
-    """Bring an older `items` to one Status with no Placement or Reviewed (ADR-0010)."""
+    """Bring an older `items` to the current shape: one Status (ADR-0010), a Due (ADR-0011)."""
     select: dict[str, str] = {}
     if "placement" in _columns(conn, "items"):
         # Foreign keys are still on here, so a trashed Item takes its Filing and preview with it.
@@ -170,7 +178,7 @@ class Database:
         with self.session() as conn:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.executescript(ITEMS_DDL.format(name="items"))
-            if "done_at" not in _items_sql(conn):
+            if "due_at" not in _items_sql(conn):
                 _migrate_items(conn)
             conn.executescript(SCHEMA)
             filled = conn.execute(

@@ -20,11 +20,13 @@ import {
   enrichmentBadge,
   externalLink,
   fmtDate,
+  fmtDue,
   fmtDuration,
   isHttp,
   itemTitle,
   originOf,
   sectionLabel,
+  toLocalInput,
 } from "./cards.js";
 
 const PENDING_POLL_MS = 3000;
@@ -44,6 +46,7 @@ export function openDetail({ list, host, item, ...hooks }) {
     rev: 0, // bumps when the Owner starts a change, so an older copy fetched in the background is dropped
     busy: false,
     draft: null, // unsaved text
+    dueOpen: false, // «+» was tapped and no Due is saved yet
   };
   let pollTimer = 0;
   const listScroll = window.scrollY;
@@ -169,9 +172,22 @@ export function openDetail({ list, host, item, ...hooks }) {
     field.append(area, save);
     const actions = el("div", "actions");
 
-    box.append(head, el("h3", null, "Секции"), sectionRow, noteTitle, field, actions);
+    // One row of fixed height holds «+», or the input with «×»: opening it moves nothing.
+    const dueRow = el("div", "due-row");
+    const dueAdd = el("button", "btn small ghost", "+ Напомнить");
+    dueAdd.onclick = openDue;
+    const dueInput = el("input", "input due-input");
+    dueInput.type = "datetime-local";
+    dueInput.name = "due";
+    dueInput.onchange = () => moveDue(dueInput.value);
+    const dueClear = el("button", "btn small ghost", "×");
+    dueClear.setAttribute("aria-label", "Убрать напоминание");
+    dueClear.onclick = removeDue;
+    dueRow.append(dueAdd, dueInput, dueClear);
+
+    box.append(head, el("h3", null, "Секции"), sectionRow, el("h3", null, "Напоминание"), dueRow, noteTitle, field, actions);
     host.replaceChildren(back, box);
-    return { box, head, sectionButtons, noteTitle, area, save, actions };
+    return { box, head, sectionButtons, noteTitle, area, save, actions, dueAdd, dueInput, dueClear };
   }
 
   async function toggleSection(slug) {
@@ -184,6 +200,44 @@ export function openDetail({ list, host, item, ...hooks }) {
     const preview = { sections: hooks.sections.filter((section) => next.has(section.slug)) };
     const updated = await patch({ sections: [...next] }, preview);
     if (updated && lastOne) toast("Перенёс в «Остальное»");
+  }
+
+  function openDue() {
+    if (state.busy) return;
+    haptic("select");
+    state.dueOpen = true;
+    sync(state.detail);
+    parts.dueInput.min = toLocalInput(new Date());
+    parts.dueInput.focus();
+    try {
+      parts.dueInput.showPicker?.();
+    } catch {
+      // a browser without a picker still takes typing
+    }
+  }
+
+  async function moveDue(value) {
+    const when = value ? new Date(value) : null;
+    if (!when || Number.isNaN(when.getTime())) {
+      sync(state.detail);
+      return;
+    }
+    if (when.getTime() <= Date.now()) {
+      toast("Это время уже прошло");
+      sync(state.detail);
+      return;
+    }
+    const due = when.toISOString();
+    const updated = await patch({ due }, { due_at: due });
+    if (updated) toast("⏰ " + fmtDue(updated.due_at));
+  }
+
+  async function removeDue() {
+    if (state.busy) return;
+    haptic("select");
+    state.dueOpen = false;
+    if (state.detail.due_at) await patch({ due: null }, { due_at: null, reminded_at: null });
+    else sync(state.detail);
   }
 
   async function reenrich() {
@@ -279,7 +333,7 @@ export function openDetail({ list, host, item, ...hooks }) {
 
   // Brings the view in line with `item`: only what differs is touched.
   function sync(item) {
-    const { head, sectionButtons, noteTitle, area, save, actions } = parts;
+    const { head, sectionButtons, noteTitle, area, save, actions, dueAdd, dueInput, dueClear } = parts;
     slot(head, JSON.stringify(HEAD_FIELDS.map((field) => item[field])), () => headNodes(item));
     const current = new Set(item.sections.map((section) => section.slug));
     for (const [slug, button] of sectionButtons) button.classList.toggle("on", current.has(slug));
@@ -287,6 +341,11 @@ export function openDetail({ list, host, item, ...hooks }) {
     const saved = item.text || "";
     if (state.draft == null && area.value !== saved) area.value = saved;
     save.disabled = area.value === saved;
+    const dueShown = Boolean(item.due_at) || state.dueOpen;
+    dueAdd.hidden = dueShown;
+    dueInput.hidden = !dueShown;
+    dueClear.hidden = !dueShown;
+    dueInput.value = item.due_at ? toLocalInput(item.due_at) : "";
     slot(actions, item.status, () => actionNodes(item));
     schedulePoll();
   }

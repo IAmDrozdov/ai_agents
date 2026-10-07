@@ -249,6 +249,7 @@ a.title { color: var(--link); text-decoration: none; }
 .badge.ok { color: var(--good); border-color: var(--good); }
 .badge.err { color: var(--danger); border-color: var(--danger); }
 .badge.run { color: var(--hint); }
+.badge.due { color: var(--hint); }
 
 .card.clickable { cursor: pointer; }
 .btn:disabled { opacity: 0.45; cursor: default; }
@@ -283,6 +284,8 @@ a.title { color: var(--link); text-decoration: none; }
   resize: vertical;
 }
 .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.due-row { display: flex; align-items: center; gap: 8px; width: 100%; height: 44px; }
+.due-input { flex: 1; min-width: 0; height: 44px; }
 
 /* Section form */
 .field-label { display: flex; flex-direction: column; gap: 4px; width: 100%; }

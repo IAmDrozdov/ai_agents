@@ -173,7 +173,8 @@ export function plural(n, one, few, many) {
   return many;
 }
 
-// Timestamps from the database are UTC "YYYY-MM-DD HH:MM:SS".
+// Timestamps from the database are UTC "YYYY-MM-DD HH:MM:SS"; a Due arrives as ISO UTC.
 export function parseTs(ts) {
-  return ts ? new Date(ts.replace(" ", "T") + "Z") : null;
+  if (!ts) return null;
+  return new Date(ts.includes("T") ? ts : ts.replace(" ", "T") + "Z");
 }

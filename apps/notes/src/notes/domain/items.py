@@ -1,4 +1,4 @@
-"""Items: Links, Notes, Files and Voices, their Filing and Status (ADR-0001, ADR-0002, ADR-0010)."""
+"""Items: Links, Notes, Files and Voices, their Filing, Status and Due (ADR-0001, 0002, 0010, 0011)."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import sqlite3
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta, tzinfo
+from enum import Enum, auto
 from typing import Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -33,6 +34,13 @@ BACKOFF = (
     timedelta(hours=12),
 )
 STALE_PENDING = timedelta(minutes=2)
+
+
+class Unset(Enum):
+    UNSET = auto()
+
+
+UNSET = Unset.UNSET
 
 
 @dataclass(frozen=True)
@@ -65,6 +73,8 @@ class Item:
     tg_ack_message_id: int | None
     tg_message_id: int | None
     show_requested_at: str | None
+    due_at: str | None
+    reminded_at: str | None
     created_at: str
     updated_at: str
     sections: tuple[Section, ...]
@@ -140,6 +150,8 @@ def _row_to_item(conn: sqlite3.Connection, row: sqlite3.Row) -> Item:
         tg_ack_message_id=row["tg_ack_message_id"],
         tg_message_id=row["tg_message_id"],
         show_requested_at=row["show_requested_at"],
+        due_at=row["due_at"],
+        reminded_at=row["reminded_at"],
         created_at=row["created_at"],
         updated_at=row["updated_at"],
         sections=_sections_of(conn, int(row["id"])),
@@ -529,20 +541,39 @@ def edit_item(
     sections: Sequence[str] | None = None,
     status: Status | None = None,
     text: str | None = None,
+    due: datetime | None | Unset = UNSET,
     now: datetime | None = None,
 ) -> Item | None:
-    """Apply one Owner edit in a transaction; `done_at` follows Status. None if missing."""
+    """Apply one Owner edit in a transaction; `done_at` follows Status. None if missing.
+
+    `due` sets or moves the Due (a future moment, else ValueError); None removes it (ADR-0011).
+    """
+    moment = (now or datetime.now(UTC)).astimezone(UTC)
+    if isinstance(due, datetime) and due.astimezone(UTC) <= moment:
+        raise ValueError("The Due must be in the future")
     with db.session() as conn:
         row = conn.execute("SELECT status FROM items WHERE id=?", (item_id,)).fetchone()
         if row is None:
             return None
         if sections is not None:
             _replace_sections(conn, item_id, sections)
+        if isinstance(due, datetime):
+            conn.execute(
+                "UPDATE items SET due_at=?, reminded_at=NULL WHERE id=?", (stamp(due), item_id)
+            )
+        elif due is None:
+            conn.execute("UPDATE items SET due_at=NULL, reminded_at=NULL WHERE id=?", (item_id,))
         if status is not None and status != row["status"]:
-            done_at = stamp(now) if status == "done" else None
+            done_at = stamp(moment) if status == "done" else None
             conn.execute(
                 "UPDATE items SET status=?, done_at=? WHERE id=?", (status, done_at, item_id)
             )
+            if status == "todo":  # a Due already past does not fire late (ADR-0011)
+                conn.execute(
+                    "UPDATE items SET reminded_at=? WHERE id=? AND due_at <= ? "
+                    "AND reminded_at IS NULL",
+                    (stamp(moment), item_id, stamp(moment)),
+                )
         if text is not None:
             conn.execute("UPDATE items SET text=? WHERE id=?", (text, item_id))
         conn.execute("UPDATE items SET updated_at=? WHERE id=?", (stamp(now), item_id))

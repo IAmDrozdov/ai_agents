@@ -22,6 +22,22 @@ export function fmtDate(ts) {
   return date ? date.toLocaleDateString("ru-RU", { day: "numeric", month: "short", year: "numeric" }) : "—";
 }
 
+// A Due in the Owner's zone, as the chat prints it: «пт, 10 окт, 19:00».
+export function fmtDue(ts) {
+  const date = parseTs(ts);
+  if (!date) return "—";
+  const day = date.toLocaleDateString("ru-RU", { weekday: "short", day: "numeric", month: "short" }).replace(".", "");
+  return `${day}, ${date.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}`;
+}
+
+const pad = (n) => String(n).padStart(2, "0");
+
+// A moment as the value a datetime-local input takes, in the Owner's zone.
+export function toLocalInput(when) {
+  const d = typeof when === "string" ? parseTs(when) : when;
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
 export const sectionLabel = (section) => `${section.emoji} ${section.name}`.trim();
 
 function sectionChip(section) {
@@ -82,6 +98,7 @@ export function card(item, opts) {
 
   const meta = el("div", "meta");
   if (opts.markDone && item.status === "done") meta.append(el("span", "badge ok", "✓ готово"));
+  if (item.due_at) meta.append(el("span", "badge due", "⏰ " + fmtDue(item.due_at)));
   for (const section of item.sections) if (section.slug !== opts.under) meta.append(sectionChip(section));
   if (meta.childElementCount) body.append(meta);
 

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict
-from datetime import date
+from datetime import UTC, date, datetime
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
@@ -11,8 +11,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from notes.db import Database
 from notes.domain import dashboard as dashboard_read
-from notes.domain import items, sections
-from notes.domain.items import DayField, Item, ItemFilter, Status
+from notes.domain import items, sections, settings
+from notes.domain.items import UNSET, DayField, Item, ItemFilter, Status, Unset
 
 from .auth import require_admin
 
@@ -26,6 +26,7 @@ class ItemPatch(BaseModel):
     sections: list[str] | None = Field(default=None, max_length=50)
     status: Status | None = None
     text: str | None = Field(default=None, max_length=4096)  # Telegram's own message limit
+    due: datetime | None = None  # a future moment sets or moves the Due, null removes it
 
 
 class SectionIn(BaseModel):
@@ -56,6 +57,23 @@ def get_db(request: Request) -> Database:
 
 
 DbDep = Annotated[Database, Depends(get_db)]
+
+
+def _item_json(item: Item) -> dict[str, Any]:
+    """An Item as the page reads it: the Due as ISO UTC, the rest as stored."""
+    data = asdict(item)
+    if item.due_at:
+        data["due_at"] = _iso(item.due_at)
+    return data
+
+
+def _iso(stamped: str) -> str:
+    return (
+        datetime.strptime(stamped, items.TIMESTAMP)
+        .replace(tzinfo=UTC)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
 
 
 def _found(item: Item | None) -> Item:
@@ -103,6 +121,9 @@ def remove_section(section_id: int, db: DbDep) -> None:
 
 @router.get("/dashboard")
 def get_dashboard(db: DbDep, tz: Annotated[str, Query(max_length=64)] = "UTC") -> dict[str, Any]:
+    settings.remember_zone(
+        db, tz
+    )  # every launch opens the Dashboard: the Owner's zone is learnt here
     board = dashboard_read.dashboard(db, tz)
     return {
         "todo": board.todo,
@@ -136,12 +157,12 @@ def get_items(
         text=q,
     )
     page = items.query(db, flt, offset=offset, limit=limit)
-    return {"items": [asdict(item) for item in page.items], "total": page.total}
+    return {"items": [_item_json(item) for item in page.items], "total": page.total}
 
 
 @router.get("/items/{item_id}")
 def get_item(item_id: int, db: DbDep) -> dict[str, Any]:
-    return asdict(_found(items.get_item(db, item_id)))
+    return _item_json(_found(items.get_item(db, item_id)))
 
 
 @router.get("/items/{item_id}/preview")
@@ -159,9 +180,9 @@ def get_item_preview(item_id: int, db: DbDep) -> Response:
 def reenrich(item_id: int, db: DbDep) -> dict[str, Any]:
     item = _found(items.get_item(db, item_id))
     if item.enrichment_status == "pending":  # already queued or in flight: don't start it twice
-        return asdict(item)
+        return _item_json(item)
     try:
-        return asdict(items.request_reenrich(db, item_id))
+        return _item_json(items.request_reenrich(db, item_id))
     except KeyError as exc:  # deleted between the read and the write
         raise HTTPException(status_code=404, detail="Item not found") from exc
 
@@ -172,15 +193,23 @@ def show_in_chat(item_id: int, db: DbDep) -> dict[str, Any]:
     item = _found(items.get_item(db, item_id))
     if item.tg_chat_id is None or item.tg_message_id is None:
         raise HTTPException(status_code=409, detail="No original message to show")
-    return asdict(_found(items.request_show(db, item_id)))
+    return _item_json(_found(items.request_show(db, item_id)))
 
 
 @router.patch("/items/{item_id}")
 def patch_item(item_id: int, patch: ItemPatch, db: DbDep) -> dict[str, Any]:
-    item = items.edit_item(
-        db, item_id, sections=patch.sections, status=patch.status, text=patch.text
-    )
-    return asdict(_found(item))
+    due: datetime | None | Unset = UNSET
+    if "due" in patch.model_fields_set:
+        if patch.due is not None and patch.due.tzinfo is None:
+            raise HTTPException(status_code=422, detail="The Due needs a time zone")
+        due = patch.due
+    try:
+        item = items.edit_item(
+            db, item_id, sections=patch.sections, status=patch.status, text=patch.text, due=due
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="Это время уже прошло") from exc
+    return _item_json(_found(item))
 
 
 @router.delete("/items/{item_id}", status_code=204)
