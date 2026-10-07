@@ -14,7 +14,7 @@ in the admin Mini App (ADR-016). Merged in from the standalone `maxi-notes` repo
 | `apps/notes/src/notes/` | domain (`domain/`), sqlite store (`db.py`), Enrichment (`enrich/`), Classifier port (`classify/`), `sweeper.py`, `smoke.py` |
 | `interfaces/telegram_bot/…/handlers/documents.py` | the admin's ask-first card (`admin_input_handler`, 💾 on the price card) |
 | `interfaces/telegram_bot/…/handlers/notes.py` | saving straight away and on 💾, the reactions, background enrichment and the sweeper; 🤖 and ↩️ only for buttons on old messages |
-| `interfaces/telegram_bot/…/notes_ui.py` | Acknowledgement reactions (✍ 👌 👎) and "show in chat" |
+| `interfaces/telegram_bot/…/notes_ui.py` | Acknowledgement reactions (✍ 👌 👎), "show in chat" and Reminders (the Due line, the reminder) |
 | `interfaces/telegram_bot/…/miniapp/` | the Mini App: notes API and UI (`telegram-miniapp`) |
 
 ## Run
@@ -22,6 +22,7 @@ in the admin Mini App (ADR-016). Merged in from the standalone `maxi-notes` repo
 ```bash
 uv run notes-smoke https://youtu.be/dQw4w9WgXcQ   # fetch + file one input, print the result
 uv run notes-smoke --voice memo.ogg               # transcribe + file a voice file
+uv run notes-smoke --now "2026-10-07 20:58" --zone Europe/Warsaw "напомни завтра"   # prints the Due
 uv run notes-smoke http://169.254.169.254/         # the SSRF guard refuses it
 uv run telegram-bot                                # 💾 on the card for ADMIN_TELEGRAM_ID
 uv run telegram-miniapp                            # http://127.0.0.1:8083, opened from Telegram
@@ -41,7 +42,7 @@ check it as in `docs/verifying.md` §2.
 ## Dashboard
 
 The Mini App opens on the Dashboard tab (`notes.domain.dashboard`): the todo count and
-Items Captured and done per local day over 26 Monday-first weeks. `done_at` is stamped when an
+Overdue Items (todo, Due passed) and Items Captured and done per local day over 26 Monday-first weeks. `done_at` is stamped when an
 Item turns `done`; on start, a done Item without one gets `done_at = updated_at` (items done
 before the column existed, so their days are approximate).
 

@@ -9,7 +9,7 @@ the notes path or the deploy. Shorthand: `telegram_bot/x.py` and `handlers/x.py`
 
 | Service | Entry point | Does | Reads / writes |
 |---|---|---|---|
-| `bot` | `telegram-bot` (`telegram_bot/__main__.py`) | Telegram long polling. Answers users, prices cards, runs one job at a time (`worker.worker_loop`), and runs notes enrichment plus the notes sweeper | `telegram_bot.sqlite3` rw, `notes.sqlite3` rw, OpenAI, YouTube, the web |
+| `bot` | `telegram-bot` (`telegram_bot/__main__.py`) | Telegram long polling. Answers users, prices cards, runs one job at a time (`worker.worker_loop`), and runs notes enrichment plus the notes sweeper, show loop and reminder loop | `telegram_bot.sqlite3` rw, `notes.sqlite3` rw, OpenAI, YouTube, the web |
 | `miniapp` | `telegram-miniapp` (`telegram_bot/miniapp`) | The admin Mini App: a public static shell plus a signed JSON API for notes and usage, `127.0.0.1:8083` (ADR-016) | `telegram_bot.sqlite3` read, `notes.sqlite3` rw |
 | `funnel` (profile) | `tailscale/tailscale` | Publishes `miniapp` over HTTPS through Tailscale Funnel, outbound only (ADR-016) | `tsstate` volume |
 | `warp` (profile) | wireproxy | SOCKS5 egress for yt-dlp only (ADR-014) | — |
@@ -43,7 +43,7 @@ only, plus `/start <invite>`. Routers then match in the order set in
 |---|---|---|
 | `start` | `/start`, `/help` (the admin's help adds a notes line) | everyone |
 | `admin` | `/invite`, `/users`, `/revoke` | admin |
-| `notes` | callbacks (`JobCB save`, `NotesCB`); messages saved with no card and acknowledged by a reaction (notes ADR-0007, ADR-0008, ADR-0009): text with no URL, several URLs, or exactly one Instagram / YouTube / TikTok URL (`direct_text_handler`, one Note or Link); a photo, video or non-agent document (`file_handler`); a voice or round video message (`voice_handler`, a Voice, transcribed in Enrichment) | admin |
+| `notes` | callbacks (`JobCB save`, `NotesCB offer` / `restore` / `done`: a Reminder's ✅ Готово marks the Item done and edits the message to «✅ сделано»); messages saved with no card and acknowledged by a reaction (notes ADR-0007, ADR-0008, ADR-0009): text with no URL, several URLs, or exactly one Instagram / YouTube / TikTok URL (`direct_text_handler`, one Note or Link); a photo, video or non-agent document (`file_handler`); a voice or round video message (`voice_handler`, a Voice, transcribed in Enrichment) | admin |
 | `documents` | an agent document (.pdf .docx .md .markdown .txt) → card; **admin** text with exactly one website URL → card with 💾 (`admin_input_handler`); anyone else's text containing a URL → card (`link_handler`) | all |
 | `settings_menu`, `status` | `/settings`, `/status`, `/cancel` | all |
 
@@ -81,19 +81,24 @@ except the admin.
 Text (`direct_text_handler`) and 💾 on a card (`save_handler` → `documents.take_draft`) go
 through `_capture_draft`: one Item per Capture, `capture_link` with dedupe for exactly one URL,
 else `capture_note` with the whole text. Files and voice (`file_handler`, `voice_handler`) go
-through `capture_file` / `capture_voice`. Then `enrich_later` → `notes.enrich.pipeline.enrich_item`. The bot sends no message: the Acknowledgement
+through `capture_file` / `capture_voice`. Then `enrich_later` → `notes.enrich.pipeline.enrich_item`. The bot sends no message of its own (a Reminder is the exception): the Acknowledgement
 is its one reaction on the admin's message (`notes_ui.react`): ✍ working, 👌 in notes, 👎 take a
 look (notes ADR-0009). A duplicate gets 👌 at once with no Enrichment (👎 if its Enrichment had
-failed), and keeps its Status, `done` included. A Capture that throws, or notes being down, gets 👎. Enrichment:
+failed), and keeps its Status, `done` included, unless its own words ask for a reminder (below). A
+Capture that throws, or notes being down, gets 👎. The bot writes a message for Reminders only
+(notes ADR-0011, below). Enrichment:
 
 1. The provider fetch runs through the SSRF guard: YouTube and TikTok oEmbed, the Instagram
    captioned embed page, or a generic page. A Voice is downloaded from Telegram instead (the bot
    passes `telegram_download` in, max 20 MB) and transcribed by `shared.audio.transcribe`; the
    Transcript is stored at once, so a Classifier retry does not pay for STT again.
 2. The Classifier (`NOTES_CLASSIFIER_PROVIDER`: `openai`, or `fake` offline) chooses the
-   Sections, the Russian Gist and the title.
-3. `store_enrichment` saves the result, and `notify` (`notes_ui.acknowledge`) sets the reaction
-   from `enrichment_status` on `tg_message_id`.
+   Sections, the Russian Gist and the title, and reads a Due when the text asks to be reminded.
+   It is told the Capture moment in the Owner's zone; the fake reads «напомни YYYY-MM-DD HH:MM».
+3. `store_enrichment` saves the result (a Due fills an empty Due only, and one not after the
+   Capture moment is dropped), and `notify` (`NotesRuntime.notify_for`) sets the reaction from
+   `enrichment_status` on `tg_message_id`; when Enrichment filled a Due that is still ahead it also
+   replies to the Capture with «⏰ пт, 10 окт, 19:00» and a web_app `📅 Перенести`.
 
 Failures go to `schedule_retry` (backoff 1 min → 12 h, then `failed`). The sweeper
 (`NOTES_ENRICH_SWEEP_SECONDS`) retries anything due and anything a restart interrupted; a retry
@@ -101,6 +106,17 @@ leaves ✍ in place. `apps/*` never imports aiogram: the bot passes `notify` and
 callbacks. If notes fails to start, the bot runs without it: direct messages get 👎, a link still
 gets its card, and 💾 answers "Notes are unavailable". The `NotesCB` handlers stay only for
 buttons on old Acknowledgement messages: 🤖 still works, ↩️ only removes itself (notes ADR-0010).
+
+**Reminders (notes ADR-0011).** An Item with a Due (`due_at`, UTC) is a Reminder.
+`NotesRuntime.start_reminder_loop` runs `remind_once` every 30 s: `claim_due_reminders` marks
+`reminded_at` and returns the todo Items whose Due has come in one `UPDATE … RETURNING`, so each goes
+out once, and the bot replies to the Item's Capture message with `✅ Готово` (`NotesCB done`) and
+`📅 Перенести` (a web_app to `/?item=<id>`); if the original is gone it sends a message naming the Item
+instead, and a network error hands the claim back for the next pass. Moving or removing a Due clears
+`reminded_at`; back to `todo` after the Due sets it, so nothing fires late. A re-sent Link whose words
+ask for a reminder goes through `Classifier.due`, and the saved Item gets the Due and reopens. The
+Owner's zone is the Mini App's last `tz` (a `settings` row, UTC until the app first opens). Overdue
+(todo, Due passed) is read off the clock and never stored.
 
 Language: the bot UI is English; notes texts and the Mini App are Russian.
 
@@ -113,11 +129,15 @@ that calls `/api/usage` and `/api/notes/*`. It has two tabs and a ⚙️ button;
 once per launch and keeps its state in memory until the app closes.
 
 - **Дашборд** (first) is infographics only (`GET /api/notes/dashboard?tz=<IANA zone>`): the todo
-  count, two 26-week heatmaps of Items Captured and done per day (days in the Owner's time zone, from
-  `created_at` and `done_at`), and a bar per Section with todo Items (`todo_count` from
-  `/api/notes/sections`). Only a bar is tappable: it opens Заметки with that Section expanded on
-  «Сделать».
-- **Заметки** lists every Section in the Owner's order as a collapsed accordion. A header shows the
+  count with «просрочено: N» beside it when anything is Overdue, two 26-week heatmaps of Items
+  Captured and done per day (days in the Owner's time zone, from `created_at` and `done_at`), and a
+  bar per Section with todo Items (`todo_count` from `/api/notes/sections`). A bar is tappable: it
+  opens Заметки with that Section expanded on «Сделать»; so is «просрочено: N», which opens the
+  «Просрочено» row. The request's `tz` is also stored as the Owner's zone.
+- **Заметки** starts with a «⏰ Просрочено» row when something is Overdue
+  (`/api/notes/items?overdue=true`, every Section, todo only, earliest Due first; collapsed on
+  launch, no switch, hidden in Search and edit mode). It lists every Section in the Owner's order as a
+  collapsed accordion. A header shows the
   count for that Section's own «Сделать» | «Готово» switch (`todo_count` / `done_count`, one Status
   per view, notes ADR-0010); an expanded Section pages `/api/notes/items?section=…&status=…`, newest
   first, and an Item under several Sections shows in each. Search (`/api/notes/items?q=`, 300 ms
@@ -128,7 +148,8 @@ once per launch and keeps its state in memory until the app closes.
 - **⚙️** opens Расходы (`/api/usage`) over the tabs; Telegram's back button returns.
 
 The item view (`detail.js`) edits an item (Sections, Annotation, «✓ Готово» / «↩ Вернуть», which
-also sets or clears `done_at`), re-enriches, and deletes it at once behind a confirm; it reports each
+also sets or clears `done_at`, and the Due: «+ Напомнить» reveals a date-time input, «×» removes it,
+a past moment is a 422), re-enriches, and deletes it at once behind a confirm; it reports each
 change back, and the accordion refreshes its counts and open lists. While an item on screen is still
 being enriched the app checks back every 3 s, and it reloads the shown tab when it becomes visible
 again; there is no push. "💬 Показать в чате" sets `show_requested_at` and closes the app; the bot's
