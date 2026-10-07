@@ -458,6 +458,27 @@ def claim_show_requests(db: Database) -> list[Item]:
         return [_fetch(conn, int(row["id"])) for row in rows]
 
 
+def claim_due_reminders(db: Database, *, now: datetime | None = None) -> list[Item]:
+    """Todo Reminders whose Due has come, marked as sent by the same statement so each goes out once."""
+    moment = stamp(now)
+    with db.session() as conn:
+        rows = conn.execute(
+            "UPDATE items SET reminded_at=? WHERE status='todo' AND due_at IS NOT NULL "
+            "AND due_at <= ? AND reminded_at IS NULL RETURNING id",
+            (moment, moment),
+        ).fetchall()
+        return [_fetch(conn, int(row["id"])) for row in sorted(rows, key=lambda r: r["id"])]
+
+
+def release_reminder(db: Database, item: Item) -> None:
+    """Hand a claimed reminder back when sending it failed for a reason worth retrying."""
+    with db.session() as conn:
+        conn.execute(
+            "UPDATE items SET reminded_at=NULL WHERE id=? AND reminded_at=?",
+            (item.id, item.reminded_at),
+        )
+
+
 def claim_due_enrichments(db: Database, *, now: datetime | None = None) -> list[int]:
     """Scheduled retries whose time has come, plus pending Items nothing has touched lately."""
     moment = (now or datetime.now(UTC)).astimezone(UTC)

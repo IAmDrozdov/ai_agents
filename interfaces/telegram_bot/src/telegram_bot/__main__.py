@@ -89,6 +89,7 @@ async def _run() -> None:
         if notes is not None:
             notes.start_sweeper(bot)
             notes.start_show_loop(bot)
+            notes.start_reminder_loop(bot)
 
     dp.startup.register(on_startup)
     await dp.start_polling(bot)

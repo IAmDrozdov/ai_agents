@@ -7,6 +7,7 @@ import contextlib
 import io
 from collections.abc import Coroutine
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 
 import aiohttp
@@ -53,6 +54,7 @@ PREVIEW_MAX_BYTES = 300_000
 # The Bot API refuses getFile above this; a longer Voice cannot be transcribed.
 TELEGRAM_DOWNLOAD_MAX = 20 * 1024 * 1024
 SHOW_POLL_S = 2
+REMIND_POLL_S = 30
 
 
 @dataclass
@@ -92,6 +94,31 @@ class NotesRuntime:
             except Exception:
                 log.exception("notes: show-in-chat pass failed; will try again")
             await asyncio.sleep(SHOW_POLL_S)
+
+    def start_reminder_loop(self, bot: Bot) -> None:
+        self.spawn(self._reminder_loop(bot))
+
+    async def _reminder_loop(self, bot: Bot) -> None:
+        """Hand todo Reminders back at their Due; the database is the queue (ADR-0011)."""
+        while True:
+            try:
+                await self.remind_once(bot)
+            except Exception:
+                log.exception("notes: reminder pass failed; will try again")
+            await asyncio.sleep(REMIND_POLL_S)
+
+    async def remind_once(self, bot: Bot, now: datetime | None = None) -> int:
+        """One reminder pass at `now`: claim every due Reminder and send it; returns how many."""
+        due = await asyncio.to_thread(items.claim_due_reminders, self.db, now=now)
+        for item in due:
+            try:
+                sent = await notes_ui.send_reminder(bot, item)
+            except Exception:
+                log.exception("notes: reminder for item %s failed", item.id)
+                sent = False
+            if not sent:
+                await asyncio.to_thread(items.release_reminder, self.db, item)
+        return len(due)
 
     def enrich_later(self, bot: Bot, item_id: int) -> None:
         self.spawn(
@@ -386,6 +413,27 @@ async def offer_handler(
     if message is None or item is None or item.url is None:
         return
     await offer_link(message, item.url, callback.from_user.id)
+
+
+@router.callback_query(NotesCB.filter(F.action == "done"))
+async def reminder_done_handler(
+    callback: CallbackQuery, callback_data: NotesCB, notes: NotesRuntime | None
+) -> None:
+    """A Reminder's ✅ Готово: the Item is done and the message says so (ADR-0011)."""
+    message = _admin_message(callback)
+    if message is None:
+        await callback.answer()
+        return
+    if notes is None:
+        await callback.answer("Notes are unavailable right now.", show_alert=True)
+        return
+    item = await asyncio.to_thread(items.edit_item, notes.db, callback_data.item_id, status="done")
+    await callback.answer("Эта заметка уже удалена" if item is None else None)
+    with contextlib.suppress(TelegramAPIError):
+        if item is None:
+            await message.edit_reply_markup(reply_markup=None)
+        else:
+            await message.edit_text(notes_ui.DONE_TEXT, reply_markup=None)
 
 
 @router.callback_query(NotesCB.filter(F.action == "restore"))

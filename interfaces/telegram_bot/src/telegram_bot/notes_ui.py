@@ -1,15 +1,28 @@
-"""Notes presentation: the Acknowledgement reaction and "show in chat", in Russian (ADR-015, ADR-0009)."""
+"""Notes presentation: the Acknowledgement reaction, "show in chat" and Reminders, in Russian (ADR-015, 0009, 0011)."""
 
 from __future__ import annotations
 
 from html import escape
 
 from aiogram import Bot
-from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
+from aiogram.exceptions import (
+    TelegramAPIError,
+    TelegramBadRequest,
+    TelegramNetworkError,
+    TelegramRetryAfter,
+    TelegramServerError,
+)
 from aiogram.filters.callback_data import CallbackData
-from aiogram.types import ReactionTypeEmoji, ReplyParameters
+from aiogram.types import (
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    ReactionTypeEmoji,
+    ReplyParameters,
+    WebAppInfo,
+)
 
 from notes.domain.items import Item
+from shared.config import settings
 from shared.obs import get_logger
 
 log = get_logger(__name__)
@@ -25,10 +38,13 @@ WORKING, DONE, LOOK = "✍", "👌", "👎"
 REACTIONS = {"pending": WORKING, "done": DONE, "failed": LOOK}
 TITLE_LIMIT = 300
 SHOW_TEXT = "↩️ Вот оно"
+REMINDER_TEXT = "⏰ Напоминание"
+DONE_TEXT = "✅ сделано"
+RETRYABLE = (TelegramNetworkError, TelegramRetryAfter, TelegramServerError)
 
 
 class NotesCB(CallbackData, prefix="n"):
-    """Notes actions on an Item: action is 'offer' (price card) or 'restore' (an old, dead button)."""
+    """Notes actions on an Item: 'offer' (price card), 'done' (a Reminder's ✅ Готово) or 'restore' (a dead button)."""
 
     action: str
     item_id: int
@@ -57,6 +73,53 @@ async def acknowledge(bot: Bot, item: Item) -> None:
     await react(
         bot, item.tg_chat_id, item.tg_message_id, REACTIONS.get(item.enrichment_status, DONE)
     )
+
+
+def miniapp_link(item_id: int) -> str | None:
+    """The Mini App opened on one Item, or None when no Mini App URL is configured."""
+    base = settings.bot_miniapp_url.strip()
+    return f"{base.rstrip('/')}/?item={item_id}" if base else None
+
+
+def reminder_keyboard(item_id: int) -> InlineKeyboardMarkup:
+    row = [
+        InlineKeyboardButton(
+            text="✅ Готово", callback_data=NotesCB(action="done", item_id=item_id).pack()
+        )
+    ]
+    if link := miniapp_link(item_id):
+        row.append(InlineKeyboardButton(text="📅 Перенести", web_app=WebAppInfo(url=link)))
+    return InlineKeyboardMarkup(inline_keyboard=[row])
+
+
+async def send_reminder(bot: Bot, item: Item) -> bool:
+    """Reply to the Item's Capture message with ✅ / 📅; if it is gone, say what it was. False: retry later."""
+    chat = item.tg_chat_id if item.tg_chat_id is not None else settings.admin_telegram_id
+    if chat is None:
+        return True
+    markup = reminder_keyboard(item.id)
+    try:
+        if item.tg_message_id is not None:
+            try:
+                await bot.send_message(
+                    chat,
+                    REMINDER_TEXT,
+                    reply_markup=markup,
+                    reply_parameters=ReplyParameters(message_id=item.tg_message_id),
+                )
+                return True
+            except TelegramBadRequest as exc:
+                log.info("item %s: original message is gone: %s", item.id, exc)
+        about = item.title or item.gist or title_of(item)
+        await bot.send_message(
+            chat, f"{REMINDER_TEXT}: <b>{escape(about)}</b>", reply_markup=markup
+        )
+    except RETRYABLE as exc:
+        log.warning("item %s: could not send the reminder, will retry: %s", item.id, exc)
+        return False
+    except TelegramAPIError as exc:
+        log.warning("item %s: could not send the reminder: %s", item.id, exc)
+    return True
 
 
 async def show_in_chat(bot: Bot, item: Item) -> None:
