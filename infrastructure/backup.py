@@ -474,11 +474,12 @@ def check_gate_closed() -> None:
         proc = subprocess.run(
             [str(GATE), "status"], capture_output=True, cwd=REPO_ROOT, timeout=120
         )
-        closed = proc.returncode == 0 and proc.stdout.strip() == b"closed"
     except (OSError, subprocess.SubprocessError) as e:
         log.warning("could not check ssh-gate status: %s", e)
         return
-    if not closed:
+    if proc.returncode != 0:
+        log.warning("could not check ssh-gate status: %s", last_line(proc.stderr))
+    elif proc.stdout.strip() != b"closed":
         log.warning("ssh-gate status is not 'closed' after the run (another gate holder?)")
 
 
