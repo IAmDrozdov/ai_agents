@@ -1,5 +1,7 @@
 # One Status, todo or done; no Archive, Trash or Reviewed
 
+_Amended by ADR-0011: a re-sent Link whose text asks to be reminded gets the Due and goes back to `todo`._
+
 An Item carries one state the Owner sets: Status, `todo` or `done`, and `done` means the Owner
 has taken the Item up (a series they started watching is done), not that they finished it.
 Placement (active / archived / trashed) and Reviewed are gone, with every operation on them:

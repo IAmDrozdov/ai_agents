@@ -1,6 +1,7 @@
 # The Acknowledgement is a reaction on the Owner's message; one Capture is one Item; only a single website link gets a card
 
 _Amended by ADR-0010 (2026-10-07): there is no Archive or Trash; a re-sent Link that is `done` stays `done`._
+_Amended by ADR-0011: the bot leaves a message for a Reminder — the Due line and the reminder itself._
 
 The chat should hold the Owner's messages and the agents' outputs, nothing else. So the bot no
 longer answers a Capture with a message. It sets one reaction on the Owner's own message and

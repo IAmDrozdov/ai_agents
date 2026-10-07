@@ -31,6 +31,18 @@ _Avoid_: attachment, upload
 An Item that is speech sent to the bot — a voice message or a round video message; Telegram keeps the bytes, notes keep the `file_id` and its Transcript.
 _Avoid_: audio, recording, голосовуха
 
+**Reminder**:
+Any Item, of any kind, that has a Due; removing the Due makes it a plain Item again. Not a fifth kind.
+_Avoid_: alarm, notification, task, напоминалка
+
+**Due**:
+The moment a Reminder is for; the bot sends the Reminder back to the Owner then, and the Owner can move it later.
+_Avoid_: deadline, remind time, trigger, срок
+
+**Overdue**:
+A Reminder whose Due has passed while its Status is still todo; read off the clock, never set, and not a Status value. A done Item is never Overdue.
+_Avoid_: late, expired, missed
+
 **Transcript**:
 The text of what is said in a Voice, written by Enrichment and never edited by the Owner.
 _Avoid_: text, caption, расшифровка
@@ -48,7 +60,7 @@ Sending the bot a message that becomes exactly one Item.
 _Avoid_: save, ingest, submit, forward
 
 **Acknowledgement**:
-The bot's single reaction on the Owner's Capture message, saying whether to wait, nothing to do, or take a look; the bot leaves no message of its own.
+The bot's single reaction on the Owner's Capture message, saying whether to wait, nothing to do, or take a look; the bot leaves no message of its own, except one line naming the Due when the Capture became a Reminder.
 _Avoid_: confirmation, receipt, card, reply, ack (in prose)
 
 **Section**:
@@ -64,7 +76,7 @@ The set of Sections an Item is in; assigned by the Classifier at Capture, change
 _Avoid_: tagging, categorisation, classification result, pre-clustering
 
 **Classifier**:
-The swappable LLM-backed component that produces an Item's Filing and Gist.
+The swappable LLM-backed component that produces an Item's Filing and Gist, and its Due when the Item's text asks to be reminded.
 _Avoid_: AI, model, LLM (in domain talk)
 
 **Enrichment**:
