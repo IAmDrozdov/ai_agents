@@ -9,7 +9,7 @@ from datetime import UTC, date, datetime, timedelta, tzinfo
 from typing import Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from notes.db import Database
+from notes.db import Database, fold
 from notes.domain.sections import OTHER_SLUG, Section, _row_to_section, other_id
 from notes.domain.urls import normalize_url
 
@@ -19,6 +19,10 @@ EnrichmentStatus = Literal["pending", "done", "failed", "skipped"]
 CaptureOutcome = Literal["new", "existing"]
 DayField = Literal["captured", "done"]
 DAY_COLUMNS: dict[DayField, str] = {"captured": "created_at", "done": "done_at"}
+# Search reads every text field but the URL ("com" would match every Link).
+SEARCH_COLUMNS = (
+    "title", "gist", "text", "caption", "transcript", "author", "sender", "source", "file_name",
+)  # fmt: skip
 
 TIMESTAMP = "%Y-%m-%d %H:%M:%S"
 BACKOFF = (
@@ -76,13 +80,14 @@ class Capture:
 
 @dataclass(frozen=True)
 class ItemFilter:
-    """Which Items a list covers: one Status, any listed Section, and one local day if set."""
+    """Which Items a list covers: one Status (both if None), any listed Section, a local day, a Search text."""
 
     sections: tuple[str, ...] = ()
-    status: Status = "todo"
+    status: Status | None = "todo"
     day: date | None = None
     day_field: DayField = "captured"
     tz: str = "UTC"
+    text: str = ""
 
 
 @dataclass(frozen=True)
@@ -477,8 +482,15 @@ def local_midnight_utc(day: date, tz: str) -> str:
 
 
 def _where(flt: ItemFilter) -> tuple[str, list[object]]:
-    clauses = ["status=?"]
-    params: list[object] = [flt.status]
+    clauses = ["1"]
+    params: list[object] = []
+    if flt.status is not None:
+        clauses.append("status=?")
+        params.append(flt.status)
+    needle = fold(flt.text.strip())
+    if needle:
+        clauses.append("(" + " OR ".join(f"instr(fold({c}), ?) > 0" for c in SEARCH_COLUMNS) + ")")
+        params.extend([needle] * len(SEARCH_COLUMNS))
     if flt.sections:
         marks = ",".join("?" * len(flt.sections))
         clauses.append(

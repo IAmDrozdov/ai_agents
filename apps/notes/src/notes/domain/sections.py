@@ -107,12 +107,13 @@ def get_section_by_slug(db: Database, slug: str) -> Section | None:
     return _row_to_section(row) if row else None
 
 
-def todo_counts(db: Database) -> dict[int, int]:
-    """Section id -> number of `todo` Items filed under it."""
+def status_counts(db: Database, status: str) -> dict[int, int]:
+    """Section id -> number of Items in `status` filed under it."""
     with db.session(readonly=True) as conn:
         rows = conn.execute(
             "SELECT x.section_id AS section_id, COUNT(*) AS n FROM item_sections x "
-            "JOIN items i ON i.id = x.item_id WHERE i.status='todo' GROUP BY x.section_id"
+            "JOIN items i ON i.id = x.item_id WHERE i.status=? GROUP BY x.section_id",
+            (status,),
         ).fetchall()
     return {int(row["section_id"]): int(row["n"]) for row in rows}
 

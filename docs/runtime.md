@@ -109,20 +109,32 @@ Language: the bot UI is English; notes texts and the Mini App are Russian.
 While `BOT_MINIAPP_URL` is set, the bot gives the admin's chat a `📒` menu button
 (`__main__.set_admin_menu_button`, at startup, for that chat only). It opens
 the `miniapp` service through the funnel sidecar: a static shell (`miniapp/static`, vanilla JS)
-that calls `/api/usage` and `/api/notes/*`. The Заметки tab opens on the Dashboard
-(`GET /api/notes/dashboard?tz=<IANA zone>`): the todo count, two 26-week heatmaps of Items Captured
-and done per day (days in the Owner's time zone, from `created_at` and `done_at`), and a bar per
-Section with todo Items (`todo_count` from `/api/notes/sections`). The Dashboard is the filter:
-tapping the count, a bar or a heatmap cell opens the collapsed list below it, filtered, with a
-«× Сбросить» pill. The list shows one Status at a time («Сделать» | «Готово», newest first),
-pages, edits an item (Sections,
-Annotation, «✓ Готово» / «↩ Вернуть», which also sets or clears `done_at`), re-enriches, and
-deletes it at once behind a confirm (notes ADR-0010). While an item on screen is still being
-enriched the app checks back every 3 s, and it reloads the list and the Dashboard when it becomes visible again;
-there is no push. "💬 Показать в чате" sets `show_requested_at` and closes the app; the bot's show
-loop (`NotesRuntime.start_show_loop`, every 2 s) replies to the Item's original message, or sends
-the file again by `file_id` if that message is gone (notes ADR-0008). The Секции tab creates, edits, reorders and deletes Sections. Enrichment files an
-Item only while it is in Other alone; once it is anywhere else, re-enrich keeps its Sections.
+that calls `/api/usage` and `/api/notes/*`. It has two tabs and a ⚙️ button; each tab is mounted
+once per launch and keeps its state in memory until the app closes.
+
+- **Дашборд** (first) is infographics only (`GET /api/notes/dashboard?tz=<IANA zone>`): the todo
+  count, two 26-week heatmaps of Items Captured and done per day (days in the Owner's time zone, from
+  `created_at` and `done_at`), and a bar per Section with todo Items (`todo_count` from
+  `/api/notes/sections`). Only a bar is tappable: it opens Заметки with that Section expanded on
+  «Сделать».
+- **Заметки** lists every Section in the Owner's order as a collapsed accordion. A header shows the
+  count for that Section's own «Сделать» | «Готово» switch (`todo_count` / `done_count`, one Status
+  per view, notes ADR-0010); an expanded Section pages `/api/notes/items?section=…&status=…`, newest
+  first, and an Item under several Sections shows in each. Search (`/api/notes/items?q=`, 300 ms
+  after typing stops, at most 100 results) covers both Statuses and every text field but the URL,
+  folded by the `fold()` SQL function the notes `Database` registers on each connection (casefold,
+  «ё» as «е»). «Изменить» shows headers only: drag ⋮⋮ to reorder (`PUT /api/notes/sections/order`),
+  ✏️ for the Section form, «+ Новая секция» at the end.
+- **⚙️** opens Расходы (`/api/usage`) over the tabs; Telegram's back button returns.
+
+The item view (`detail.js`) edits an item (Sections, Annotation, «✓ Готово» / «↩ Вернуть», which
+also sets or clears `done_at`), re-enriches, and deletes it at once behind a confirm; it reports each
+change back, and the accordion refreshes its counts and open lists. While an item on screen is still
+being enriched the app checks back every 3 s, and it reloads the shown tab when it becomes visible
+again; there is no push. "💬 Показать в чате" sets `show_requested_at` and closes the app; the bot's
+show loop (`NotesRuntime.start_show_loop`, every 2 s) replies to the Item's original message, or sends
+the file again by `file_id` if that message is gone (notes ADR-0008). Enrichment files an Item only
+while it is in Other alone; once it is anywhere else, re-enrich keeps its Sections.
 
 Every `/api` call carries `Authorization: tma <initData>`. `miniapp/auth.py` checks Telegram's
 HMAC against `MINIAPP_INIT_SECRET`, requires `auth_date` under 24 h and admits only

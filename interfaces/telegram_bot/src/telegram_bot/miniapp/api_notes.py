@@ -66,10 +66,12 @@ def _found(item: Item | None) -> Item:
 
 @router.get("/sections")
 def get_sections(db: DbDep) -> dict[str, Any]:
-    counts = sections.todo_counts(db)
+    todo = sections.status_counts(db, "todo")
+    done = sections.status_counts(db, "done")
     return {
         "sections": [
-            asdict(section) | {"todo_count": counts.get(section.id, 0)}
+            asdict(section)
+            | {"todo_count": todo.get(section.id, 0), "done_count": done.get(section.id, 0)}
             for section in sections.list_sections(db)
         ]
     }
@@ -116,6 +118,7 @@ def get_items(
     db: DbDep,
     section: Annotated[list[str] | None, Query(max_length=50)] = None,
     status: Status = "todo",
+    q: Annotated[str, Query(max_length=200)] = "",
     day: date | None = None,
     day_field: DayField = "captured",
     tz: Annotated[str, Query(max_length=64)] = "UTC",
@@ -125,7 +128,12 @@ def get_items(
     if day is not None and not date(2000, 1, 1) <= day <= date(2100, 1, 1):
         raise HTTPException(status_code=422, detail="day out of range")
     flt = ItemFilter(
-        sections=tuple(section or ()), status=status, day=day, day_field=day_field, tz=tz
+        sections=tuple(section or ()),
+        status=None if q.strip() else status,  # Search covers both Statuses
+        day=day,
+        day_field=day_field,
+        tz=tz,
+        text=q,
     )
     page = items.query(db, flt, offset=offset, limit=limit)
     return {"items": [asdict(item) for item in page.items], "total": page.total}

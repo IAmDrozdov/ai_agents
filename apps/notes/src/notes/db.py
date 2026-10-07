@@ -130,6 +130,11 @@ def _migrate_items(conn: sqlite3.Connection) -> None:
     _rebuild_items(conn, select)
 
 
+def fold(value: str | None) -> str | None:
+    """Search's case fold: Unicode casefold, «ё» read as «е» (SQLite's LIKE folds ASCII only)."""
+    return None if value is None else value.casefold().replace("ё", "е")
+
+
 class Database:
     """Path holder; every operation opens its own short-lived connection."""
 
@@ -144,6 +149,7 @@ class Database:
             conn = sqlite3.connect(self.path, timeout=5)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys=ON")
+        conn.create_function("fold", 1, fold, deterministic=True)
         return conn
 
     @contextmanager

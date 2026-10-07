@@ -1,490 +1,372 @@
-// Заметки: the Dashboard, the collapsible item list (Status switch, filter pill) and the item view.
-// Nothing is rebuilt on a tap: controls are built once and only change class or text, cards are reused by id.
+// Заметки: every Section as an accordion with its own Status switch (ADR-0010), Search over all Items, and an edit
+// mode that reorders Sections by drag and drop. The state lives in memory for one launch.
 
-import {
-  AuthError,
-  api,
-  apiImageUrl,
-  attempt,
-  confirmAction,
-  el,
-  handleError,
-  haptic,
-  isHalted,
-  openUrl,
-  parseTs,
-  reconcile,
-  setBack,
-  setText,
-  slot,
-  tg,
-  toast,
-} from "./core.js";
-import { TIMEZONE, buildDashboard, fmtDay } from "./dashboard.js";
+import { AuthError, api, attempt, el, handleError, haptic, isHalted, reconcile, setText, toast } from "./core.js";
+import { card, sectionLabel } from "./cards.js";
+import { openDetail } from "./detail.js";
+import { openSectionForm } from "./sections.js";
 
-const PAGE = 50;
+const PAGE = 30;
 const MAX_CHUNK = 100; // the most items the server returns in one request
+const SEARCH_DELAY_MS = 300;
+const STALE_AFTER_MS = 350;
+const PENDING_POLL_MS = 3000;
+const EDGE = 56; // a drag this close to the top or bottom of the screen scrolls the page
 const STATUSES = [
   ["todo", "Сделать"],
   ["done", "Готово"],
 ];
-const OTHER = "other";
-const STALE_AFTER_MS = 350;
-const PENDING_POLL_MS = 3000;
-// The item fields the top of the item view shows; it is rebuilt only when one of them changes.
-const HEAD_FIELDS = [
-  "kind", "url", "title", "text", "source", "author", "gist", "file_name",
-  "created_at", "enrichment_status", "enrichment_error", "caption",
-  "transcript", "sender", "duration_s", "tg_message_id",
-]; // prettier-ignore
 
-const isHttp = (url) => /^https?:\/\//i.test(url || "");
-const itemTitle = (item) =>
-  item.title || item.url || item.file_name || item.text || (item.kind === "voice" ? "🎤 Голосовое" : "Без названия");
-const originOf = (item) =>
-  [item.source, item.author, item.sender && "↪️ " + item.sender].filter(Boolean).join(" · ");
-const hasPreview = (item) =>
-  item.kind === "file" || (item.kind === "voice" && (item.file_mime || "").startsWith("video/"));
-
-function fmtDuration(seconds) {
-  const s = Math.max(0, Math.round(seconds || 0));
-  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
-}
-
-function fmtDate(ts) {
-  const date = parseTs(ts);
-  return date ? date.toLocaleDateString("ru-RU", { day: "numeric", month: "short", year: "numeric" }) : "—";
-}
-
-function sectionChip(section) {
-  const chip = el("span", "chip", `${section.emoji} ${section.name}`.trim());
-  chip.style.setProperty("--chip", section.color);
-  return chip;
-}
-
-function externalLink(item, title) {
-  const link = el("a", "title", title);
-  link.href = item.url;
-  link.onclick = (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    openUrl(item.url);
-  };
-  return link;
-}
-
-function enrichmentBadge(item) {
-  if (item.enrichment_status === "pending") return el("div", "badge run", "⏳ разбираю");
-  const why = item.enrichment_error ? ": " + item.enrichment_error : "";
-  return el("div", "badge err", "⚠️ не разобрано" + why);
-}
-
-// handlers: open(item) shows the item view, changed(item) receives an item the card re-enriched.
-function card(item, handlers) {
-  const node = el("article", "card clickable");
-  node.onclick = () => handlers.open(item);
-  if (isHttp(item.image_url)) {
-    const img = el("img", "thumb");
-    img.alt = "";
-    img.loading = "lazy";
-    img.referrerPolicy = "no-referrer";
-    img.src = item.image_url;
-    node.append(img);
-  } else if (hasPreview(item)) {
-    const img = el("img", "thumb");
-    img.alt = "";
-    node.append(img);
-    apiImageUrl(`/notes/items/${item.id}/preview`).then((url) => {
-      if (url) img.src = url;
-      else img.remove();
-    });
+// `want` items from `offset`, in requests the server accepts, all under `base`.
+async function fetchItems(base, offset, want) {
+  const items = [];
+  for (;;) {
+    const query = new URLSearchParams(base);
+    query.set("offset", String(offset + items.length));
+    query.set("limit", String(Math.min(MAX_CHUNK, want - items.length)));
+    const data = await api("/notes/items?" + query);
+    items.push(...data.items);
+    if (!data.items.length || items.length >= want || offset + items.length >= data.total) {
+      return { items, total: data.total };
+    }
   }
-
-  const body = el("div", "card-body");
-  const title = itemTitle(item);
-  if (item.kind === "link" && isHttp(item.url)) body.append(externalLink(item, title));
-  else body.append(el("div", "title", title));
-  const origin = originOf(item);
-  if (origin) body.append(el("div", "origin", origin));
-  if (item.kind === "file" && item.file_name) body.append(el("div", "origin", "📎 " + item.file_name));
-  if (item.kind === "voice") body.append(el("div", "origin", "🎤 " + fmtDuration(item.duration_s)));
-  if (item.gist) body.append(el("div", "gist", item.gist));
-  if (item.kind !== "note" && item.text) body.append(el("div", "annotation", "✍️ " + item.text));
-
-  const meta = el("div", "meta");
-  for (const section of item.sections) meta.append(sectionChip(section));
-  body.append(meta);
-
-  if (item.enrichment_status === "pending") {
-    body.append(enrichmentBadge(item));
-  } else if (item.enrichment_status === "failed") {
-    body.append(enrichmentBadge(item));
-    const retry = el("button", "btn small", "Разобрать заново");
-    retry.onclick = async (event) => {
-      event.stopPropagation();
-      const updated = await attempt(() => api(`/notes/items/${item.id}/reenrich`, { method: "POST" }));
-      if (updated) handlers.changed(updated);
-    };
-    body.append(retry);
-  }
-  node.append(body);
-  return node;
 }
 
-// launch.itemId opens that item straight away (the ✏️ Открыть button in the chat).
-export async function mountNotes(root, launch = {}) {
-  setBack(null);
+// ctx.isCurrent() is false while another tab is shown. Returns { show(arg), shown(), hide() };
+// arg: { expand: slug } (a Dashboard Section bar) or { itemId } (the ✏️ Открыть button in the chat).
+export async function mountNotes(root, ctx) {
   const state = {
-    sections: [],
-    board: null, // the Dashboard's last response
-    filter: null, // what a Dashboard figure set: { kind: "section", slug } or { kind: "day", field, day }
-    open: false, // the list starts collapsed
-    status: "todo",
-    items: [],
-    total: 0,
-    ticket: 0,
-    loading: false,
-    failed: false,
-    detail: null,
-    version: 0, // bumps whenever the open item changes hands, so a late reply cannot land on another item
-    rev: 0, // bumps when the Owner starts a change, so an older copy fetched in the background is dropped
-    dirty: false,
-    busy: false,
-    draft: null, // unsaved text of the open item
-    listScroll: 0,
+    sections: [], // in the Owner's order, each with todo_count and done_count
+    expanded: new Set(), // slugs
+    status: new Map(), // slug -> Status; a missing slug is on todo
+    query: "", // the Search text the results belong to
+    results: null, // { items, total } while searching
+    folded: new Set(), // slugs the Owner collapsed in the current results
+    editing: false,
+    overlay: null, // the open item view or Section form
+    dirty: false, // something changed under the overlay: refresh once it closes
+    after: null, // what shown() does once the pane is on screen
   };
-  const listView = el("div");
-  const detailView = el("div");
-  detailView.hidden = true;
-  root.replaceChildren(listView, detailView);
+  const groups = new Map(); // slug -> group
 
-  const dash = buildDashboard(pickFigure);
-  const listHead = el("button", "list-head");
-  const listBody = el("div");
-  listBody.hidden = true;
-  const switcher = el("div", "segmented");
-  const pill = el("div", "pill");
-  const pillText = el("span");
-  const pillClear = el("button", "pill-clear", "× Сбросить");
-  pill.append(pillText, pillClear);
-  pill.hidden = true;
-  const list = el("div", "cards");
-  const more = el("button", "btn wide", "Показать ещё");
-  listBody.append(switcher, pill, list, more);
-  listView.append(dash.node, listHead, listBody);
+  const main = el("div");
+  const overlay = el("div");
+  overlay.hidden = true;
+  root.replaceChildren(main, overlay);
 
-  // --- Dashboard, list header, filter pill and Status switch ------------------
+  const bar = el("div", "notes-bar");
+  const search = el("input", "input search");
+  Object.assign(search, { type: "search", placeholder: "Поиск", maxLength: 200, autocomplete: "off" });
+  search.enterKeyHint = "search";
+  const editButton = el("button", "btn small ghost edit-toggle");
+  bar.append(search, editButton);
+  const notice = el("p", "hint notice");
+  const accordion = el("div", "accordion");
+  const empty = el("p", "empty");
+  const retryButton = el("button", "btn wide ghost", "Повторить");
+  retryButton.hidden = true;
+  retryButton.onclick = () => refresh();
+  const addButton = el("button", "btn wide ghost", "+ Новая секция");
+  main.append(bar, notice, accordion, empty, retryButton, addButton);
 
-  function filterQuery() {
-    const query = new URLSearchParams({ status: state.status });
-    const filter = state.filter;
-    if (filter?.kind === "section") query.append("section", filter.slug);
-    if (filter?.kind === "day") {
-      query.set("day", filter.day);
-      query.set("day_field", filter.field);
-      query.set("tz", TIMEZONE);
+  const statusOf = (slug) => state.status.get(slug) || "todo";
+  const searching = () => state.results != null && !state.editing;
+
+  // --- groups --------------------------------------------------------------
+
+  function makeGroup(section) {
+    const g = { slug: section.slug, section, items: [], total: 0, loaded: false, loading: false, failed: false };
+    g.ticket = 0;
+    g.cards = new Map(); // id -> { sig, node }
+    g.node = el("section", "group");
+    const head = el("div", "group-head");
+    g.handle = el("span", "handle", "⋮⋮");
+    g.handle.setAttribute("aria-label", "Перетащить");
+    g.toggle = el("button", "group-toggle");
+    g.caret = el("span", "caret");
+    g.label = el("span", "group-name");
+    g.count = el("span", "group-n");
+    g.toggle.append(g.caret, g.label, g.count);
+    g.edit = el("button", "btn small ghost group-edit", "✏️");
+    g.edit.setAttribute("aria-label", "Изменить секцию");
+    head.append(g.handle, g.toggle, g.edit);
+
+    g.switcher = el("div", "segmented");
+    g.segs = new Map();
+    for (const [value, label] of STATUSES) {
+      const button = el("button", "seg", label);
+      button.onclick = () => setStatus(g, value);
+      g.segs.set(value, button);
+      g.switcher.append(button);
     }
-    return query;
+    g.list = el("div", "cards");
+    g.note = el("p", "empty");
+    g.more = el("button", "btn wide ghost", "Ещё");
+    g.body = el("div", "group-body");
+    g.body.append(g.switcher, g.list, g.more);
+    g.node.append(head, g.body);
+
+    g.toggle.onclick = () => toggleGroup(g);
+    g.edit.onclick = () => openForm(g.section);
+    // After a failed first page "Повторить" starts over; after a failed later page it asks for that page again.
+    g.more.onclick = () => loadGroup(g, g.failed && !g.items.length);
+    g.handle.onpointerdown = (event) => startDrag(g, event);
+    g.handle.onpointermove = moveDrag;
+    g.handle.onpointerup = () => endDrag(false);
+    g.handle.onpointercancel = () => endDrag(true);
+    return g;
   }
 
-  function filterLabel() {
-    const filter = state.filter;
-    if (filter?.kind === "section") {
-      const section = state.sections.find((s) => s.slug === filter.slug);
-      return section ? `${section.emoji} ${section.name}`.trim() : filter.slug;
-    }
-    if (filter?.kind === "day") return `${filter.field === "done" ? "Готово" : "Добавлено"} ${fmtDay(filter.day)}`;
-    return "";
-  }
-
-  // A figure on the Dashboard is the filter: it sets the list's state, opens the list and brings it into view.
-  function pickFigure(kind, value) {
-    haptic("select");
-    if (kind === "todo") {
-      state.filter = null;
-      state.status = "todo";
-    } else if (kind === "section") {
-      state.filter = { kind: "section", slug: value };
-      state.status = "todo";
-    } else {
-      state.filter = { kind: "day", field: kind, day: value };
-      state.status = kind === "done" ? "done" : "todo";
-    }
-    state.open = true;
-    syncControls();
-    load(true);
-    listHead.scrollIntoView({ behavior: "smooth", block: "start" });
-  }
-
-  pillClear.onclick = () => {
-    state.filter = null;
-    syncControls();
-    load(true);
-  };
-
-  listHead.onclick = () => {
-    state.open = !state.open;
-    syncControls();
-  };
-
-  const statusTabs = new Map();
-  for (const [value, label] of STATUSES) {
-    const button = el("button", "seg", label);
-    button.onclick = () => {
-      if (state.status === value) return;
-      state.status = value;
-      syncControls();
-      load(true);
-    };
-    statusTabs.set(value, button);
-    switcher.append(button);
-  }
-
-  function syncControls() {
-    const doneDay = state.filter?.kind === "day" && state.filter.field === "done"; // only done Items can match
-    for (const [value, button] of statusTabs) button.classList.toggle("on", state.status === value);
-    switcher.hidden = doneDay;
-    pill.hidden = !state.filter;
-    setText(pillText, filterLabel());
-    listBody.hidden = !state.open;
-    setText(listHead, `${state.open ? "▾" : "▸"} Записи · ${state.total}`);
-    dash.update(state.board, state.sections);
-  }
-
-  // --- list ----------------------------------------------------------------
-
-  const cardCache = new Map(); // id -> { sig, node }
-  const note = el("p", "empty");
-
-  function cardFor(item) {
-    const sig = JSON.stringify(item);
-    const hit = cardCache.get(item.id);
+  function cardFor(g, item, marked) {
+    const sig = JSON.stringify(item) + marked;
+    const hit = g.cards.get(item.id);
     if (hit && hit.sig === sig) return hit.node;
-    const node = card(item, { open: openItem, changed: replaceItem });
-    cardCache.set(item.id, { sig, node });
+    const node = card(item, { open: openItem, changed: itemChanged, under: g.slug, markDone: marked });
+    g.cards.set(item.id, { sig, node });
     return node;
   }
 
-  function emptyText() {
-    if (state.loading) return "Загрузка…";
-    if (state.failed) return "Не удалось загрузить список.";
-    if (state.filter) return "Под фильтр ничего не попало.";
-    return state.status === "todo" ? "Пока пусто. Кинь боту ссылку или заметку." : "Тут пусто.";
+  function groupNote(g) {
+    if (g.loading || !g.loaded) return "Загрузка…";
+    if (g.failed) return "Не удалось загрузить.";
+    return "Тут пусто.";
   }
 
-  function renderList() {
-    const live = new Set(state.items.map((item) => item.id));
-    for (const id of cardCache.keys()) if (!live.has(id)) cardCache.delete(id);
-    let nodes = state.items.map(cardFor);
+  function renderGroup(g, found) {
+    const status = statusOf(g.slug);
+    const inSearch = found != null;
+    const open = !state.editing && (inSearch ? !state.folded.has(g.slug) : state.expanded.has(g.slug));
+    const n = inSearch ? found.length : g.section[status + "_count"] || 0;
+    g.node.style.setProperty("--chip", g.section.color);
+    g.node.classList.toggle("dim", n === 0);
+    g.node.classList.toggle("open", open);
+    setText(g.label, sectionLabel(g.section));
+    setText(g.count, String(n));
+    setText(g.caret, open ? "▾" : "▸");
+    g.caret.hidden = state.editing;
+    g.handle.hidden = !state.editing;
+    g.edit.hidden = !state.editing;
+    g.toggle.disabled = state.editing;
+    g.body.hidden = !open;
+    if (!open) return;
+
+    g.switcher.hidden = inSearch;
+    for (const [value, button] of g.segs) button.classList.toggle("on", value === status);
+    const items = inSearch ? found : g.items;
+    const live = new Set(items.map((item) => item.id));
+    for (const id of g.cards.keys()) if (!live.has(id)) g.cards.delete(id);
+    let nodes = items.map((item) => cardFor(g, item, inSearch));
     if (!nodes.length) {
-      setText(note, emptyText());
-      nodes = [note];
+      setText(g.note, groupNote(g));
+      nodes = [g.note];
     }
-    reconcile(list, nodes);
-    more.hidden = !state.failed && state.items.length >= state.total;
-    more.disabled = state.loading;
-    setText(more, state.failed ? "Повторить" : "Показать ещё");
-    syncControls();
+    reconcile(g.list, nodes);
+    g.more.hidden = inSearch || !g.loaded || (!g.failed && g.items.length >= g.total);
+    g.more.disabled = g.loading;
+    setText(g.more, g.failed ? "Повторить" : "Ещё");
+  }
+
+  // Search results by Section: an Item filed under two Sections shows under both (ADR-0002).
+  function resultsBySection() {
+    const found = new Map();
+    for (const item of state.results.items) {
+      for (const section of item.sections) {
+        if (!found.has(section.slug)) found.set(section.slug, []);
+        found.get(section.slug).push(item);
+      }
+    }
+    return found;
+  }
+
+  function render() {
+    const found = searching() ? resultsBySection() : null;
+    const nodes = [];
+    for (const section of state.sections) {
+      let g = groups.get(section.slug);
+      if (!g) {
+        g = makeGroup(section);
+        groups.set(section.slug, g);
+      }
+      g.section = section;
+      if (found && !found.has(section.slug)) continue;
+      renderGroup(g, found?.get(section.slug));
+      nodes.push(g.node);
+    }
+    const slugs = new Set(state.sections.map((section) => section.slug));
+    for (const slug of groups.keys()) if (!slugs.has(slug)) groups.delete(slug);
+    if (!drag) reconcile(accordion, nodes);
+
+    search.hidden = state.editing;
+    setText(editButton, state.editing ? "Готово" : "Изменить");
+    addButton.hidden = !state.editing;
+    accordion.classList.toggle("editing", state.editing);
+    const capped = found && state.results.total > state.results.items.length;
+    notice.hidden = !capped;
+    if (capped) setText(notice, `Показаны первые ${state.results.items.length} из ${state.results.total}. Уточни запрос.`);
+    empty.hidden = nodes.length > 0;
+    setText(empty, found ? "Ничего не нашлось." : sectionsFailed ? "Не удалось загрузить секции." : "Загрузка…");
+    retryButton.hidden = !(sectionsFailed && !nodes.length);
     schedulePoll();
   }
 
-  // `want` items from `offset`, in requests the server accepts, all under the filter as it is now.
-  async function fetchItems(offset, want) {
-    const base = filterQuery().toString();
-    const items = [];
-    for (;;) {
-      const query = new URLSearchParams(base);
-      query.set("offset", String(offset + items.length));
-      query.set("limit", String(Math.min(MAX_CHUNK, want - items.length)));
-      const data = await api("/notes/items?" + query);
-      items.push(...data.items);
-      if (!data.items.length || items.length >= want || offset + items.length >= data.total) {
-        return { items, total: data.total };
-      }
-    }
-  }
+  // --- loading -------------------------------------------------------------
 
   // A reset keeps the old list on screen until the new one arrives, then swaps it once.
   // `want` is how many items a reset brings back; `soft` keeps the list if the request fails.
-  async function load(reset, want = PAGE, soft = false) {
-    if (!reset && state.loading) return;
-    const ticket = ++state.ticket;
-    state.loading = true;
-    more.disabled = true;
+  async function loadGroup(g, reset, want = PAGE, soft = false) {
+    if (!reset && g.loading) return;
+    const ticket = ++g.ticket;
+    const status = statusOf(g.slug);
+    g.loading = true;
+    g.more.disabled = true;
     const dim = () => {
-      if (ticket === state.ticket) list.classList.add("stale");
+      if (ticket === g.ticket) g.list.classList.add("stale");
     };
-    const staleTimer = reset && state.items.length ? setTimeout(dim, STALE_AFTER_MS) : null;
-    const data = await attempt(() => fetchItems(reset ? 0 : state.items.length, want));
+    const staleTimer = reset && g.items.length ? setTimeout(dim, STALE_AFTER_MS) : null;
+    const base = new URLSearchParams({ section: g.slug, status });
+    const data = await attempt(() => fetchItems(base, reset ? 0 : g.items.length, want));
     clearTimeout(staleTimer);
-    if (ticket !== state.ticket) return;
-    list.classList.remove("stale");
-    state.loading = false;
-    state.failed = !data && !soft;
+    if (ticket !== g.ticket) return;
+    g.list.classList.remove("stale");
+    g.loading = false;
+    g.failed = !data && !soft;
     if (data) {
       // offsets shift when an item is added or moved between two requests: never list one twice
-      const seen = new Set(reset ? [] : state.items.map((item) => item.id));
-      const fresh = [];
-      for (const item of data.items) {
-        if (seen.has(item.id)) continue;
-        seen.add(item.id);
-        fresh.push(item);
-      }
-      state.items = reset ? fresh : state.items.concat(fresh);
-      state.total = data.total;
-    } else if (reset && !soft) {
-      state.items = [];
-      state.total = 0;
+      const seen = new Set(reset ? [] : g.items.map((item) => item.id));
+      const fresh = data.items.filter((item) => !seen.has(item.id) && seen.add(item.id));
+      g.items = reset ? fresh : g.items.concat(fresh);
+      g.total = data.total;
+      g.loaded = true;
+      g.section[status + "_count"] = data.total;
+    } else if (reset && (!soft || !g.loaded)) {
+      g.items = [];
+      g.total = 0;
+      g.loaded = true;
+      g.failed = true;
     }
-    renderList();
+    render();
   }
 
+  let sectionsTicket = 0;
+  let orderGen = 0; // bumps when an order save starts or ends: a list read across it may hold the old order
+  let sectionsFailed = false;
   async function loadSections() {
+    const ticket = ++sectionsTicket;
+    const gen = orderGen;
     const data = await attempt(() => api("/notes/sections"));
-    if (data) state.sections = data.sections;
-    syncControls();
+    if (ticket !== sectionsTicket) return;
+    sectionsFailed = !data && !state.sections.length;
+    if (data && gen === orderGen && !drag && !orderSaving) state.sections = data.sections;
+    render();
   }
 
-  let boardTicket = 0; // a slower, older reply must not overwrite a newer one
-  async function loadBoard() {
-    const ticket = ++boardTicket;
-    const data = await attempt(() => api("/notes/dashboard?" + new URLSearchParams({ tz: TIMEZONE })));
-    if (data && ticket === boardTicket) state.board = data;
-    syncControls();
+  let searchTicket = 0;
+  async function runSearch(query) {
+    const ticket = ++searchTicket;
+    const data = await attempt(() => api("/notes/items?" + new URLSearchParams({ q: query, limit: MAX_CHUNK })));
+    if (ticket !== searchTicket || !data || query !== search.value.trim()) return; // what is typed now wins
+    if (query !== state.query) state.folded = new Set();
+    state.query = query;
+    state.results = data;
+    render();
   }
 
-  // Reloads what is on screen (at least as many items, so the scroll position stays valid).
-  function refresh() {
-    return Promise.all([loadSections(), loadBoard(), load(true, Math.max(PAGE, state.items.length), true)]);
-  }
-
-  // The server's filter, mirrored: an item that no longer fits is gone before the list is shown again.
-  // A day filter is judged by Status alone: an edit never moves an Item to another day without changing its Status.
-  function matchesFilter(item) {
-    if (item.status !== state.status) return false;
-    const filter = state.filter;
-    return filter?.kind !== "section" || item.sections.some((section) => section.slug === filter.slug);
-  }
-
-  // An item keeps its place while it fits the filter (the order is by creation) and leaves the list once not.
-  function replaceItem(updated) {
-    if (!state.items.some((item) => item.id === updated.id)) return;
-    if (matchesFilter(updated)) {
-      state.items = state.items.map((item) => (item.id === updated.id ? updated : item));
-    } else {
-      state.items = state.items.filter((item) => item.id !== updated.id);
-      state.total = Math.max(0, state.total - 1);
+  // Reloads what is on screen: the counts, the open Sections (as many items as they show) and the results.
+  // A collapsed Section reloads when it opens again.
+  async function refresh() {
+    await loadSections();
+    const jobs = [];
+    for (const g of groups.values()) {
+      if (state.expanded.has(g.slug)) jobs.push(loadGroup(g, true, Math.max(PAGE, g.items.length), true));
+      else {
+        g.ticket += 1; // an expand load still in flight answers from before the change
+        g.loading = false;
+        g.loaded = false;
+      }
     }
-    renderList();
+    const query = search.value.trim();
+    if (query) jobs.push(runSearch(query));
+    await Promise.all(jobs);
   }
 
-  function dropItem(id) {
-    state.items = state.items.filter((item) => item.id !== id);
-    state.total = Math.max(0, state.total - 1);
-    renderList();
+  // --- the Owner's taps ------------------------------------------------------
+
+  function toggleGroup(g) {
+    haptic("select");
+    if (searching()) {
+      if (!state.folded.delete(g.slug)) state.folded.add(g.slug);
+    } else if (!state.expanded.delete(g.slug)) {
+      state.expanded.add(g.slug);
+      if (!g.loaded) loadGroup(g, true);
+    }
+    render();
   }
 
-  // --- item view -----------------------------------------------------------
+  function setStatus(g, value) {
+    if (statusOf(g.slug) === value) return;
+    haptic("select");
+    state.status.set(g.slug, value);
+    loadGroup(g, true);
+    render();
+  }
 
-  // Opens from the list's copy at once, then quietly picks up anything newer from the server.
+  let searchTimer = 0;
+  search.oninput = () => {
+    clearTimeout(searchTimer);
+    const query = search.value.trim();
+    if (!query) {
+      searchTicket += 1; // drop any answer still on its way
+      state.query = "";
+      state.results = null;
+      render();
+      return;
+    }
+    if (query === state.query && state.results) {
+      searchTicket += 1; // an answer for what was typed in between must not land
+      return;
+    }
+    searchTimer = setTimeout(() => runSearch(query), SEARCH_DELAY_MS);
+  };
+  search.onkeydown = (event) => {
+    if (event.key === "Enter") search.blur(); // closes the keyboard; the results are already there
+  };
+
+  editButton.onclick = () => {
+    haptic("select");
+    state.editing = !state.editing;
+    render();
+  };
+  addButton.onclick = () => openForm(null);
+
+  // --- overlays: the item view and the Section form --------------------------
+
   function openItem(item) {
-    showDetail(item);
-    freshen(item.id);
+    state.overlay = openDetail({
+      list: main,
+      host: overlay,
+      item,
+      sections: state.sections,
+      changed: itemChanged,
+      deleted: itemDeleted,
+      closed: overlayClosed,
+      visible: ctx.isCurrent,
+    });
   }
 
-  async function openById(id) {
-    const item = await attempt(() => api(`/notes/items/${id}`));
-    if (item && launch.alive?.() !== false) showDetail(item);
+  function openForm(section) {
+    state.overlay = openSectionForm({
+      list: main,
+      host: overlay,
+      section,
+      saved: () => {
+        state.dirty = true;
+      },
+      closed: overlayClosed,
+    });
   }
 
-  async function freshen(id) {
-    if (state.busy) return; // a reply sent before the change lands could undo it on screen
-    const version = state.version;
-    const rev = state.rev;
-    let fresh;
-    try {
-      fresh = await api(`/notes/items/${id}`);
-    } catch (error) {
-      if (error instanceof AuthError) handleError(error); // anything else: the copy already on screen will do
-      return;
-    }
-    if (version !== state.version || rev !== state.rev || state.busy) return;
-    if (JSON.stringify(fresh) !== JSON.stringify(state.detail)) {
-      if (state.detail.enrichment_status === "pending" && fresh.enrichment_status !== "pending") state.dirty = true; // counts moved
-      state.detail = fresh;
-      syncDetail(fresh);
-      replaceItem(fresh);
-    }
-  }
-
-  // Enrichment settles within seconds: while an item on screen is still pending, check back quietly.
-  let pollTimer = 0;
-  function schedulePoll() {
-    clearTimeout(pollTimer);
-    if (launch.alive?.() === false || isHalted() || document.visibilityState !== "visible") return;
-    const pending = detailView.hidden
-      ? state.items.some((item) => item.enrichment_status === "pending")
-      : state.detail?.enrichment_status === "pending";
-    if (pending) pollTimer = setTimeout(pollPending, PENDING_POLL_MS);
-  }
-
-  async function pollPending() {
-    if (launch.alive?.() === false) return;
-    try {
-      if (!detailView.hidden) await freshen(state.detail.id);
-      else if (await listSettled()) await refresh();
-    } finally {
-      schedulePoll();
-    }
-  }
-
-  // One request for the loaded page: true once a pending item there is done, failed or gone.
-  async function listSettled() {
-    const query = filterQuery();
-    query.set("limit", String(Math.min(MAX_CHUNK, Math.max(PAGE, state.items.length))));
-    let page;
-    try {
-      page = await api("/notes/items?" + query);
-    } catch (error) {
-      if (error instanceof AuthError) handleError(error); // anything else: try again on the next tick
-      return false;
-    }
-    const pendingNow = new Set(page.items.filter((item) => item.enrichment_status === "pending").map((item) => item.id));
-    return state.items.some((item) => item.enrichment_status === "pending" && !pendingNow.has(item.id));
-  }
-
-  // Back in the app after sending something in the chat: show what arrived meanwhile.
-  function onReturn() {
-    if (launch.alive?.() === false) {
-      document.removeEventListener("visibilitychange", onReturn);
-      return;
-    }
-    if (document.visibilityState !== "visible") return;
-    if (detailView.hidden) refresh();
-    else schedulePoll();
-  }
-  document.addEventListener("visibilitychange", onReturn);
-
-  function showDetail(item) {
-    state.detail = item;
-    state.draft = null;
-    state.version += 1;
-    state.listScroll = window.scrollY;
-    buildDetail();
-    syncDetail(item);
-    listView.hidden = true;
-    detailView.hidden = false;
-    setBack(closeDetail);
-    window.scrollTo(0, 0);
-    schedulePoll();
-  }
-
-  function closeDetail() {
-    state.version += 1;
-    detailView.hidden = true;
-    listView.hidden = false;
-    setBack(null);
-    window.scrollTo(0, state.listScroll);
+  function overlayClosed() {
+    state.overlay = null;
     if (state.dirty) {
       state.dirty = false;
       refresh();
@@ -492,221 +374,210 @@ export async function mountNotes(root, launch = {}) {
     schedulePoll();
   }
 
-  // One change at a time: a second tap would be built from state the first one is about to replace.
-  async function act(fn) {
-    if (state.busy) return undefined;
-    state.busy = true;
-    const box = detailParts.box; // the card, not the whole view: "← К списку" stays tappable
-    box.classList.add("busy");
-    try {
-      return await attempt(fn);
-    } finally {
-      state.busy = false;
-      box.classList.remove("busy");
+  const fits = (item, g) => item.status === statusOf(g.slug) && item.sections.some((s) => s.slug === g.slug);
+
+  // An item keeps its place while it still fits a Section's list and leaves it once not; the refresh that follows
+  // brings it into the lists it moved to and corrects the counts.
+  function itemChanged(updated) {
+    for (const g of groups.values()) {
+      const at = g.items.findIndex((item) => item.id === updated.id);
+      if (at < 0) continue;
+      if (fits(updated, g)) g.items[at] = updated;
+      else {
+        g.items.splice(at, 1);
+        g.total = Math.max(0, g.total - 1);
+      }
     }
+    if (state.results) {
+      state.results.items = state.results.items.map((item) => (item.id === updated.id ? updated : item));
+    }
+    changed();
   }
 
-  // A change that finishes after the Owner already went back to the list still refreshes it.
-  function settle() {
-    state.dirty = true;
-    if (detailView.hidden) {
-      state.dirty = false;
-      refresh();
+  function itemDeleted(id) {
+    for (const g of groups.values()) {
+      const before = g.items.length;
+      g.items = g.items.filter((item) => item.id !== id);
+      g.total = Math.max(0, g.total - (before - g.items.length));
     }
+    if (state.results) {
+      const before = state.results.items.length;
+      state.results.items = state.results.items.filter((item) => item.id !== id);
+      state.results.total -= before - state.results.items.length;
+    }
+    changed();
   }
 
-  // `preview` is shown at once and dropped if the server says no; the server's item then replaces it.
-  async function patch(body, preview = {}) {
-    if (state.busy) return null;
-    const version = state.version;
-    const before = state.detail;
-    state.rev += 1;
-    syncDetail({ ...before, ...preview });
-    const updated = await act(() => api(`/notes/items/${before.id}`, { method: "PATCH", body }));
-    if (version !== state.version) {
-      if (updated) settle();
-      return updated ?? null;
-    }
-    if (!updated) {
-      syncDetail(before);
-      return null;
-    }
-    state.detail = updated;
-    if ("text" in body && detailParts.area.value === body.text) state.draft = null; // else typing went on meanwhile
-    syncDetail(updated);
-    replaceItem(updated);
-    haptic("success");
-    settle();
-    return updated;
+  function changed() {
+    render();
+    if (state.overlay) state.dirty = true;
+    else refresh();
   }
 
-  const detailParts = {};
+  // --- pending items and coming back to the app --------------------------------
 
-  function buildDetail() {
-    const back = el("button", "btn small ghost", "← К списку");
-    back.onclick = closeDetail;
-    const box = el("article", "detail");
-    const head = el("div", "stack");
+  let pollTimer = 0;
+  function schedulePoll() {
+    clearTimeout(pollTimer);
+    if (state.overlay || drag || !ctx.isCurrent() || isHalted() || document.visibilityState !== "visible") return;
+    const shown = searching()
+      ? state.results.items
+      : [...groups.values()].filter((g) => state.expanded.has(g.slug)).flatMap((g) => g.items);
+    if (shown.some((item) => item.enrichment_status === "pending")) pollTimer = setTimeout(refresh, PENDING_POLL_MS);
+  }
 
-    const sectionRow = el("div", "chip-row");
-    const sectionButtons = new Map();
-    for (const section of state.sections) {
-      const chip = el("button", "chip filter", `${section.emoji} ${section.name}`.trim());
-      chip.style.setProperty("--chip", section.color);
-      chip.onclick = () => toggleSection(section.slug);
-      sectionButtons.set(section.slug, chip);
-      sectionRow.append(chip);
-    }
+  // Back in the app after sending something in the chat: show what arrived meanwhile.
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible" && ctx.isCurrent() && !state.overlay && !drag) refresh();
+  });
 
-    const noteTitle = el("h3");
-    const field = el("div", "field");
-    const area = el("textarea", "textarea");
-    area.name = "text";
-    area.rows = 4;
-    area.maxLength = 4096;
-    const save = el("button", "btn small", "Сохранить");
-    area.oninput = () => {
-      const unchanged = area.value === (state.detail.text || "");
-      state.draft = unchanged ? null : area.value;
-      save.disabled = unchanged;
+  // --- drag and drop (edit mode) ---------------------------------------------
+
+  let drag = null;
+  let orderSaving = false;
+
+  function startDrag(g, event) {
+    if (!state.editing || drag || orderSaving || state.sections.length < 2) return;
+    event.preventDefault();
+    const nodes = [...accordion.children];
+    const from = nodes.indexOf(g.node);
+    const tops = nodes.map((node) => node.getBoundingClientRect().top);
+    drag = {
+      g,
+      nodes,
+      from,
+      to: from,
+      pitch: tops[1] - tops[0],
+      startY: event.clientY,
+      startScroll: window.scrollY,
+      y: event.clientY,
+      pointerId: event.pointerId,
+      frame: 0,
     };
-    save.onclick = () => patch({ text: area.value });
-    field.append(area, save);
-    const actions = el("div", "actions");
-
-    box.append(head, el("h3", null, "Секции"), sectionRow, noteTitle, field, actions);
-    detailView.replaceChildren(back, box);
-    Object.assign(detailParts, { box, head, sectionButtons, noteTitle, area, save, actions });
-  }
-
-  async function toggleSection(slug) {
-    if (state.busy) return;
+    g.handle.setPointerCapture(event.pointerId);
+    accordion.classList.add("sorting");
+    g.node.classList.add("dragging");
     haptic("select");
-    const next = new Set(state.detail.sections.map((section) => section.slug));
-    const wasOn = next.delete(slug);
-    if (!wasOn) next.add(slug);
-    const lastOne = wasOn && !next.size && slug !== OTHER;
-    const preview = { sections: state.sections.filter((section) => next.has(section.slug)) };
-    const updated = await patch({ sections: [...next] }, preview);
-    if (updated && lastOne) toast("Перенёс в «Остальное»");
+    drag.frame = requestAnimationFrame(autoScroll);
   }
 
-  async function reenrich() {
-    if (state.busy) return;
-    const version = state.version;
-    const id = state.detail.id;
-    const slugs = state.detail.sections.map((section) => section.slug);
-    const refiles = !slugs.length || (slugs.length === 1 && slugs[0] === OTHER); // the Classifier's rule (ADR-0010)
-    state.rev += 1;
-    const updated = await act(() => api(`/notes/items/${id}/reenrich`, { method: "POST" }));
-    if (!updated) return;
-    if (version === state.version) {
-      state.detail = updated;
-      syncDetail(updated);
-      toast(refiles ? "Поставил в очередь" : "Поставил в очередь. Секции оставлю как есть");
-    }
-    settle();
+  function moveDrag(event) {
+    if (!drag || event.pointerId !== drag.pointerId) return;
+    drag.y = event.clientY;
+    place();
   }
 
-  async function deleteForever() {
-    if (state.busy || !(await confirmAction("Удалить эту запись навсегда?"))) return;
-    const version = state.version;
-    const id = state.detail.id;
-    state.rev += 1;
-    const gone = await act(async () => {
-      await api(`/notes/items/${id}`, { method: "DELETE" });
-      return true;
-    });
-    if (!gone) return;
-    dropItem(id);
-    state.dirty = true;
-    toast("Удалено");
-    if (version === state.version) closeDetail();
-    else settle();
-  }
-
-  function headNodes(item) {
-    const nodes = [];
-    const title = itemTitle(item);
-    nodes.push(item.kind === "link" && isHttp(item.url) ? externalLink(item, title) : el("h2", "title", title));
-    const origin = originOf(item);
-    if (origin) nodes.push(el("div", "origin", origin));
-    if (item.gist) nodes.push(el("div", "gist", item.gist));
-    nodes.push(el("div", "hint", "Сохранено " + fmtDate(item.created_at)));
-    if (item.enrichment_status === "pending") {
-      nodes.push(enrichmentBadge(item));
-    } else {
-      if (item.enrichment_status === "failed") nodes.push(enrichmentBadge(item));
-      const retry = el("button", "btn small ghost", "Разобрать заново");
-      retry.onclick = reenrich;
-      nodes.push(retry);
-    }
-    if (item.tg_message_id) {
-      const show = el("button", "btn small ghost", "💬 Показать в чате");
-      show.onclick = showInChat;
-      nodes.push(show);
-    }
-    if (item.kind === "voice") nodes.push(el("div", "hint", "🎤 " + fmtDuration(item.duration_s)));
-    if (item.transcript) {
-      const details = el("details", "caption");
-      details.open = true;
-      details.append(el("summary", null, "Расшифровка"), el("p", null, item.transcript));
-      nodes.push(details);
-    }
-    if (item.caption) {
-      const details = el("details", "caption");
-      details.append(el("summary", null, "Описание"), el("p", null, item.caption));
-      nodes.push(details);
-    }
-    return nodes;
-  }
-
-  // The bot replies to the original message within a couple of seconds; the app gets out of the way.
-  async function showInChat() {
-    if (state.busy) return;
-    const shown = await act(() => api(`/notes/items/${state.detail.id}/show`, { method: "POST" }));
-    if (!shown) return;
-    haptic("success");
-    tg.close();
-  }
-
-  function actionNodes(item) {
-    const nodes = [];
-    const add = (label, cls, handler) => {
-      const button = el("button", "btn small " + cls, label);
-      button.onclick = handler;
-      nodes.push(button);
-    };
-    const mark = (status) => () => {
+  // The dragged header follows the finger; the others slide over to show where it would land.
+  function place() {
+    const { g, nodes, from, pitch } = drag;
+    const last = nodes.length - 1;
+    const raw = drag.y - drag.startY + (window.scrollY - drag.startScroll);
+    const dy = Math.max(-from * pitch, Math.min((last - from) * pitch, raw));
+    g.node.style.transform = `translateY(${dy}px)`;
+    const to = Math.max(0, Math.min(last, Math.round(from + dy / pitch)));
+    if (to !== drag.to) {
+      drag.to = to;
       haptic("select");
-      patch({ status }, { status });
-    };
-    if (item.status === "todo") add("✓ Готово", "", mark("done"));
-    else add("↩ Вернуть", "ghost", mark("todo"));
-    add("Удалить", "danger", deleteForever);
-    return nodes;
+    }
+    nodes.forEach((node, i) => {
+      if (node === g.node) return;
+      let shift = 0;
+      if (from < to && i > from && i <= to) shift = -pitch;
+      if (from > to && i >= to && i < from) shift = pitch;
+      node.style.transform = shift ? `translateY(${shift}px)` : "";
+    });
   }
 
-  // Brings the open item view in line with `item`: only what differs is touched.
-  function syncDetail(item) {
-    const { head, sectionButtons, noteTitle, area, save, actions } = detailParts;
-    slot(head, JSON.stringify(HEAD_FIELDS.map((field) => item[field])), () => headNodes(item));
-    const current = new Set(item.sections.map((section) => section.slug));
-    for (const [slug, button] of sectionButtons) button.classList.toggle("on", current.has(slug));
-    setText(noteTitle, item.kind === "note" ? "Текст заметки" : "Моя пометка");
-    const saved = item.text || "";
-    if (state.draft == null && area.value !== saved) area.value = saved;
-    save.disabled = area.value === saved;
-    slot(actions, item.status, () => actionNodes(item));
+  function autoScroll() {
+    if (!drag) return;
+    const step = drag.y < EDGE ? -8 : drag.y > window.innerHeight - EDGE ? 8 : 0;
+    if (step) {
+      const before = window.scrollY;
+      window.scrollBy(0, step);
+      if (window.scrollY !== before) place();
+    }
+    drag.frame = requestAnimationFrame(autoScroll);
+  }
+
+  function endDrag(cancelled) {
+    if (!drag) return;
+    const { g, nodes, from, to, frame } = drag;
+    cancelAnimationFrame(frame);
+    drag = null;
+    accordion.classList.remove("sorting");
+    g.node.classList.remove("dragging");
+    for (const node of nodes) node.style.transform = "";
+    if (cancelled || to === from) {
+      render();
+      return;
+    }
+    const next = [...state.sections];
+    const [moved] = next.splice(from, 1);
+    next.splice(to, 0, moved);
+    saveOrder(next);
+  }
+
+  // The new order shows at once; the server's answer confirms it, or the old order comes back.
+  async function saveOrder(next) {
+    const before = state.sections;
+    state.sections = next;
+    render();
+    orderSaving = true;
+    orderGen += 1;
+    try {
+      await api("/notes/sections/order", { method: "PUT", body: { ids: next.map((section) => section.id) } });
+      haptic("success");
+    } catch (error) {
+      state.sections = before;
+      render();
+      if (error instanceof AuthError) handleError(error);
+      else toast("Не удалось сохранить порядок");
+    } finally {
+      orderSaving = false;
+      orderGen += 1;
+    }
+    if (state.sections === before) loadSections(); // the server may know a list this page does not
+  }
+
+  // --- the tab ---------------------------------------------------------------
+
+  async function show(arg = {}) {
+    state.after = null;
+    if (arg.expand) {
+      // a Section bar on the Dashboard: that Section open on «Сделать», nothing hiding it
+      state.editing = false;
+      search.value = "";
+      state.query = "";
+      state.results = null;
+      searchTicket += 1;
+      state.expanded.add(arg.expand);
+      state.status.set(arg.expand, "todo");
+      await refresh();
+      state.after = () => groups.get(arg.expand)?.node.scrollIntoView({ block: "start" });
+      return;
+    }
+    await refresh();
+    if (arg.itemId) {
+      const item = await attempt(() => api(`/notes/items/${arg.itemId}`));
+      if (item) state.after = () => openItem(item);
+    }
+  }
+
+  function shown() {
+    const after = state.after;
+    state.after = null;
+    after?.();
     schedulePoll();
   }
 
-  // --- start ---------------------------------------------------------------
+  function hide() {
+    clearTimeout(pollTimer);
+    endDrag(true);
+    state.overlay?.close();
+  }
 
-  // After a failed first page "Повторить" starts over; after a failed later page it asks for that page again.
-  more.onclick = () => load(state.failed && !state.items.length);
-  more.hidden = true;
-  syncControls();
-  await Promise.all([loadSections(), loadBoard(), load(true)]);
-  if (launch.itemId) await openById(launch.itemId);
+  editButton.textContent = "Изменить";
+  addButton.hidden = true;
+  notice.hidden = true;
+  return { show, shown, hide };
 }

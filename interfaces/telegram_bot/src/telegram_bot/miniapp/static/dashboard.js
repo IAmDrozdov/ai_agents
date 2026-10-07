@@ -1,6 +1,6 @@
-// Dashboard: todo headline, two day heatmaps on one scale, Section bars. Every figure reports a pick; the list below filters.
+// Дашборд: todo headline, two day heatmaps on one scale, Section bars. Only a Section bar is tappable.
 
-import { el, setText, slot } from "./core.js";
+import { api, attempt, el, setText, slot } from "./core.js";
 
 const SVG = "http://www.w3.org/2000/svg";
 const CELL = 11;
@@ -11,7 +11,7 @@ const TOP = 12; // room for the month labels
 const WEEKDAYS = [[0, "Пн"], [2, "Ср"], [4, "Пт"]]; // prettier-ignore
 const EMPTY_HINT = "Пока пусто. Кинь боту ссылку или заметку.";
 
-export const TIMEZONE = (() => {
+const TIMEZONE = (() => {
   try {
     return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
   } catch {
@@ -30,7 +30,7 @@ const addDays = (iso, n) => {
   return isoDay(date);
 };
 
-export function fmtDay(iso) {
+function fmtDay(iso) {
   return parseDay(iso).toLocaleDateString("ru-RU", { day: "numeric", month: "short", timeZone: "UTC" }).replace(".", "");
 }
 
@@ -50,7 +50,7 @@ function levelOf(n, max) {
   return Math.max(1, Math.ceil((4 * n) / max));
 }
 
-function heatmap(series, board, max, field, onPick) {
+function heatmap(series, board, max, field) {
   const weeks = Math.floor((parseDay(board.to) - parseDay(board.from)) / (7 * 86400000)) + 1;
   const width = LEFT + weeks * PITCH - GAP;
   const svg = svgNode("svg", { viewBox: `0 0 ${width} ${TOP + 7 * PITCH - GAP}`, class: `heat ${field}`, role: "img" });
@@ -77,24 +77,22 @@ function heatmap(series, board, max, field, onPick) {
         width: CELL,
         height: CELL,
         rx: 2,
-        class: `cell l${levelOf(n, max)}${n ? " tap" : ""}`,
+        class: `cell l${levelOf(n, max)}`,
       });
       rect.append(svgNode("title", {}, `${fmtDay(day)}: ${n}`));
-      if (n) rect.onclick = () => onPick(field, day);
       svg.append(rect);
     }
   }
   return svg;
 }
 
-// Returns { node, update(board, sections) }; onPick(kind, value): "todo", "section" + slug, "captured" / "done" + day.
-export function buildDashboard(onPick) {
+// Returns { node, update(board, sections) }; onSection(slug) runs when a Section bar is tapped.
+function buildDashboard(onSection) {
   const node = el("div", "board");
 
-  const headline = el("button", "headline");
+  const headline = el("div", "headline");
   const headNumber = el("span", "headline-n");
   headline.append(headNumber, el("span", "headline-label", "Сделать"));
-  headline.onclick = () => onPick("todo", null);
 
   const hint = el("p", "empty");
   hint.hidden = true;
@@ -117,7 +115,7 @@ export function buildDashboard(onPick) {
 
     for (const [box, field] of [[captured, "captured"], [done, "done"]]) {
       slot(bodyOf(box), JSON.stringify([board.from, board.to, max, board[field]]), () => [
-        heatmap(board[field], board, max, field, onPick),
+        heatmap(board[field], board, max, field),
       ]);
     }
 
@@ -132,11 +130,35 @@ export function buildDashboard(onPick) {
         const track = el("span", "bar-track");
         track.append(fill);
         row.append(el("span", "bar-label", `${section.emoji} ${section.name}`.trim()), track, el("span", "bar-n", String(section.todo_count)));
-        row.onclick = () => onPick("section", section.slug);
+        row.onclick = () => onSection(section.slug);
         return row;
       }),
     );
   }
 
   return { node, update };
+}
+
+// ctx.openSection(slug) opens Заметки with that Section expanded; ctx.isCurrent() is false while another tab shows.
+// Returns { show, hide }; show reloads the figures.
+export async function mountDashboard(root, ctx) {
+  const dash = buildDashboard(ctx.openSection);
+  root.replaceChildren(dash.node);
+  let ticket = 0; // a slower, older reply must not overwrite a newer one
+
+  async function show() {
+    const mine = ++ticket;
+    const [board, sections] = await Promise.all([
+      attempt(() => api("/notes/dashboard?" + new URLSearchParams({ tz: TIMEZONE }))),
+      attempt(() => api("/notes/sections")),
+    ]);
+    if (mine === ticket && board && sections) dash.update(board, sections.sections);
+  }
+
+  // Back in the app after sending something in the chat: the figures move.
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible" && ctx.isCurrent()) show();
+  });
+
+  return { show, hide() {} };
 }

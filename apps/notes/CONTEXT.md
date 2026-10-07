@@ -88,8 +88,12 @@ Whether the Owner has taken an Item up yet: todo, or done once they have — a s
 _Avoid_: state, stage, progress, viewed, started, archived, open, closed
 
 **Dashboard**:
-The top of the Mini App's notes tab: how many Items are todo, how many were Captured and done each day, and how the todo Items spread over Sections; tapping a figure filters the list below it.
+The Mini App's first tab, infographics only: how many Items are todo, how many were Captured and done each day, and how the todo Items spread over Sections; tapping a Section there opens it in the Items tab.
 _Avoid_: overview, home, stats, обзор
+
+**Search**:
+Finding Items in the Mini App by the words in their text fields, across every Section and both Statuses.
+_Avoid_: filter, find, lookup
 
 **Browse**:
 Reading Sections and Items from inside the bot.
