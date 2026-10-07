@@ -26,8 +26,7 @@ from shared.obs import get_logger
 
 log = get_logger(__name__)
 
-# Called with the stored Item once Enrichment lands, e.g. to update the Acknowledgement; the flag says
-# this Enrichment filled the Item's Due (ADR-0011).
+# Called with the stored Item once Enrichment lands; the flag: this Enrichment filled its Due.
 Notify = Callable[[Item, bool], Awaitable[None]]
 
 

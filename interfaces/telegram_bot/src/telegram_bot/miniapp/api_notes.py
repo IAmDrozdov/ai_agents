@@ -120,11 +120,13 @@ def remove_section(section_id: int, db: DbDep) -> None:
 
 
 @router.get("/dashboard")
-def get_dashboard(db: DbDep, tz: Annotated[str, Query(max_length=64)] = "UTC") -> dict[str, Any]:
-    settings.remember_zone(
-        db, tz
-    )  # every launch opens the Dashboard: the Owner's zone is learnt here
-    board = dashboard_read.dashboard(db, tz)
+def get_dashboard(
+    db: DbDep, tz: Annotated[str | None, Query(max_length=64)] = None
+) -> dict[str, Any]:
+    # every launch opens the Dashboard: the Owner's zone is learnt here
+    if tz:
+        settings.remember_zone(db, tz)
+    board = dashboard_read.dashboard(db, tz or "UTC")
     return {
         "todo": board.todo,
         "overdue": board.overdue,

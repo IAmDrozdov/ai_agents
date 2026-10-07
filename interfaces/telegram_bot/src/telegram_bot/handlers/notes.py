@@ -76,7 +76,7 @@ class NotesRuntime:
 
         async def notify(item: Item, due_filled: bool) -> None:
             await notes_ui.acknowledge(bot, item)
-            if due_filled:
+            if due_filled and item.status == "todo":
                 zone = await asyncio.to_thread(settings_store.get_zone, self.db)
                 await notes_ui.announce_due(bot, item, zone)
 
@@ -151,11 +151,9 @@ class NotesRuntime:
         if local is None:
             return None
         due = items.local_to_utc(local, zone)
-        if due <= now:
-            return None
         try:
             updated = await asyncio.to_thread(items.set_reminder, self.db, item.id, due, now=now)
-        except KeyError:  # deleted meanwhile
+        except (KeyError, ValueError):  # deleted meanwhile, or a Due not in the future
             return None
         await notes_ui.announce_due(bot, updated, zone, reply_to=reply_to)
         return updated
@@ -205,10 +203,7 @@ def build_runtime() -> NotesRuntime:
 
 
 async def _capture_draft(draft: Draft, chat_id: int, notes: NotesRuntime) -> tuple[Item, bool, str]:
-    """One Item per Capture: a Link for exactly one URL, else a Note of the whole text (ADR-0009).
-
-    The last value is the Owner's own words with a Link (its Annotation), which a repeat may use to ask for a reminder.
-    """
+    """One Item per Capture (ADR-0009): the Item, whether it is new, and the Link's Annotation."""
     extracted = extract_urls(draft.text, linked=draft.links)
     if len(extracted.urls) == 1:
         capture = await asyncio.to_thread(
@@ -242,7 +237,7 @@ async def _settle(
     is_new: bool,
     words: str = "",
 ) -> None:
-    """A new Item enriches and its reaction follows; a duplicate is in notes already, unless it asks for a reminder."""
+    """A new Item enriches; a duplicate is in notes already, but its `words` may ask for a reminder."""
     if is_new:
         notes.enrich_later(bot, item.id)
         return

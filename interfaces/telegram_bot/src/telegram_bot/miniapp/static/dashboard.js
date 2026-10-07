@@ -143,6 +143,9 @@ function buildDashboard(onSection, onOverdue) {
   return { node, update };
 }
 
+// Tells the server the Owner's zone without drawing anything: a launch on one Item skips the Dashboard.
+export const reportZone = () => attempt(() => api("/notes/dashboard?" + new URLSearchParams({ tz: TIMEZONE })));
+
 // ctx.openSection(slug) opens Заметки with that Section expanded, ctx.openOverdue() with the «Просрочено» row; ctx.isCurrent() is false while another tab shows.
 // Returns { show, hide }; show reloads the figures.
 export async function mountDashboard(root, ctx) {

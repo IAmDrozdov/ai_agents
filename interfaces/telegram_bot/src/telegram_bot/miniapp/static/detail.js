@@ -345,7 +345,7 @@ export function openDetail({ list, host, item, ...hooks }) {
     dueAdd.hidden = dueShown;
     dueInput.hidden = !dueShown;
     dueClear.hidden = !dueShown;
-    dueInput.value = item.due_at ? toLocalInput(item.due_at) : "";
+    if (document.activeElement !== dueInput) dueInput.value = item.due_at ? toLocalInput(item.due_at) : "";
     slot(actions, item.status, () => actionNodes(item));
     schedulePoll();
   }

@@ -32,4 +32,4 @@ Reminder lives on as Overdue in the Mini App.
 - A done Item is never reminded and never Overdue; its Due is kept, so taking it back to `todo` before the Due restores the reminder.
 - "Через N" counts from Capture. A Due already passed when Enrichment ends (backoff) sends the reminder at once.
 - Due is stored in UTC and read in the Owner's zone, which notes remembers from the Mini App's `tz`; UTC until the Mini App first opens.
-- The sweeper sends due Reminders, so one arrives up to one sweep late, and a Due missed while the bot was down goes out on the first sweep after start.
+- A reminder pass in the bot (every 30 s) sends due Reminders, so one arrives up to half a minute late, and a Due missed while the bot was down goes out on the first pass after start.

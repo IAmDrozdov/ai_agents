@@ -3,7 +3,7 @@
 
 import { OVERDUE } from "./cards.js";
 import { el, handleError, isHalted, prepareShell, setBack, showMessage, tg } from "./core.js";
-import { mountDashboard } from "./dashboard.js";
+import { mountDashboard, reportZone } from "./dashboard.js";
 import { mountNotes } from "./notes.js";
 import { mountUsage } from "./usage.js";
 
@@ -110,7 +110,10 @@ function boot() {
 
   // The ✏️ Открыть button in the chat launches the app with ?item=<id>.
   const item = new URLSearchParams(location.search).get("item");
-  if (item && /^\d+$/.test(item)) select("notes", { itemId: item });
+  if (item && /^\d+$/.test(item)) {
+    reportZone();
+    select("notes", { itemId: item });
+  }
   else select(TABS[0].id);
 }
 

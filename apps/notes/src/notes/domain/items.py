@@ -1,4 +1,4 @@
-"""Items: Links, Notes, Files and Voices, their Filing, Status and Due (ADR-0001, 0002, 0010, 0011)."""
+"""Items: Links, Notes, Files and Voices, their Filing, Status and Due."""
 
 from __future__ import annotations
 
@@ -508,6 +508,8 @@ def release_reminder(db: Database, item: Item) -> None:
 
 def set_reminder(db: Database, item_id: int, due: datetime, *, now: datetime | None = None) -> Item:
     """A fresh explicit request: the Due replaces any old one and the Item goes back to todo (ADR-0011)."""
+    if due.astimezone(UTC) <= (now or datetime.now(UTC)).astimezone(UTC):
+        raise ValueError("The Due must be in the future")
     with db.session() as conn:
         cur = conn.execute(
             "UPDATE items SET due_at=?, reminded_at=NULL, status='todo', done_at=NULL, "

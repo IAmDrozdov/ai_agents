@@ -95,6 +95,11 @@ dp.update.outer_middleware(AccessMiddleware()); setup_routers(dp)
   - an invitee's plain text is ignored;
   - the admin's commands still reach their routers;
   - a document never becomes a note.
+- **Reminders (notes ADR-0011):** the fake Classifier reads «напомни 2026-10-10 19:00» from a Note,
+  an Annotation, a caption or a Transcript, so every kind of Capture can be made a Reminder offline;
+  `NotesRuntime.remind_once(bot, now)` takes the clock, so a harness drives the reminder pass and
+  asserts on the recorded replies. `notes-smoke --now "YYYY-MM-DD HH:MM" --zone <IANA>` runs the real
+  Classifier on a phrasing and prints the Due.
 
 ## 4. Production, after `deploy.sh` (free)
 
