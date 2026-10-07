@@ -8,13 +8,21 @@ const DEFAULT_COLOR = "#8a8a8a";
 function labelled(box, label, type, value, attrs = {}) {
   const wrap = el("label", "field-label");
   wrap.append(el("span", "hint", label));
-  const input = el("input", "input");
-  input.type = type;
+  const input = type === "textarea" ? el("textarea", "textarea") : el("input", "input");
+  if (type !== "textarea") input.type = type;
   input.value = value;
   Object.assign(input, attrs);
   wrap.append(input);
   box.append(wrap);
   return input;
+}
+
+// Grows a textarea to its text, so a long hint reads without scrolling inside the box.
+function fitHeight(area) {
+  const y = window.scrollY; // the "auto" reset shortens the page for a moment and would move it
+  area.style.height = "auto";
+  area.style.height = `${area.scrollHeight + area.offsetHeight - area.clientHeight}px`;
+  window.scrollTo(0, y);
 }
 
 // Shows the form for `section` (null: a new one) in `host` instead of `list`. saved() runs when a change lands,
@@ -55,10 +63,12 @@ export function openSectionForm({ list, host, section, saved, closed }) {
   // The server counts characters; this is only a loose bound (UTF-16 units overcount emoji).
   const emoji = labelled(box, "Эмодзи", "text", section?.emoji ?? "", { name: "emoji", maxLength: 32 });
   const color = labelled(box, "Цвет", "color", section?.color ?? DEFAULT_COLOR, { name: "color" });
-  const hint = labelled(box, "Подсказка для разбора: что сюда относится", "text", section?.hint ?? "", {
+  const hint = labelled(box, "Подсказка для разбора: что сюда относится", "textarea", section?.hint ?? "", {
     name: "hint",
-    maxLength: 200,
+    maxLength: 500,
+    rows: 3,
   });
+  hint.oninput = () => fitHeight(hint);
 
   const actions = el("div", "actions");
   const save = el("button", "btn", "Сохранить");
@@ -100,6 +110,7 @@ export function openSectionForm({ list, host, section, saved, closed }) {
   host.replaceChildren(back, box);
   list.hidden = true;
   host.hidden = false;
+  fitHeight(hint);
   setBack(close);
   window.scrollTo(0, 0);
   return { close };
