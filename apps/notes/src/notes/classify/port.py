@@ -56,6 +56,14 @@ class Filing(BaseModel):
     due: datetime | None = None  # a naive wall-clock moment in the Owner's zone (ADR-0011)
 
 
+class DueRequest(BaseModel):
+    """The Owner's words alone, asked only whether they ask to be reminded and when."""
+
+    text: str
+    now_local: str
+    zone: str = "UTC"
+
+
 class ClassifierError(Exception):
     """Base for everything a Classifier can fail with."""
 
@@ -74,3 +82,7 @@ class ClassifierRefused(ClassifierError):
 
 class Classifier(Protocol):
     async def file(self, request: FilingRequest) -> Filing: ...
+
+    async def due(self, request: DueRequest) -> datetime | None:
+        """The naive local moment `request.text` asks to be reminded at, or None."""
+        ...

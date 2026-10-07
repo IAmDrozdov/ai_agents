@@ -7,7 +7,7 @@ import contextlib
 import io
 from collections.abc import Coroutine
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 import aiohttp
@@ -16,7 +16,7 @@ from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
 from aiogram.types import CallbackQuery, Message
 
 from notes.classify import make_classifier
-from notes.classify.port import Classifier
+from notes.classify.port import Classifier, ClassifierError, DueRequest
 from notes.db import Database
 from notes.domain import items
 from notes.domain import settings as settings_store
@@ -132,6 +132,34 @@ class NotesRuntime:
                 await asyncio.to_thread(items.release_reminder, self.db, item)
         return len(due)
 
+    async def request_reminder(
+        self, bot: Bot, item: Item, words: str, reply_to: int | None
+    ) -> Item | None:
+        """A re-sent Link's own words may ask for a reminder: the saved Item gets that Due and reopens."""
+        if not words.strip():
+            return None
+        now = datetime.now(UTC)
+        zone = await asyncio.to_thread(settings_store.get_zone, self.db)
+        request = DueRequest(
+            text=words, now_local=items.local_clock(items.stamp(now), zone), zone=zone
+        )
+        try:
+            local = await self.classifier.due(request)
+        except ClassifierError as exc:
+            log.warning("notes: could not read a Due from a re-sent link: %s", exc)
+            return None
+        if local is None:
+            return None
+        due = items.local_to_utc(local, zone)
+        if due <= now:
+            return None
+        try:
+            updated = await asyncio.to_thread(items.set_reminder, self.db, item.id, due, now=now)
+        except KeyError:  # deleted meanwhile
+            return None
+        await notes_ui.announce_due(bot, updated, zone, reply_to=reply_to)
+        return updated
+
     def enrich_later(self, bot: Bot, item_id: int) -> None:
         self.spawn(
             enrich_item(
@@ -176,8 +204,11 @@ def build_runtime() -> NotesRuntime:
     return NotesRuntime(db=db, http=AiohttpClient(), classifier=make_classifier(settings))
 
 
-async def _capture_draft(draft: Draft, chat_id: int, notes: NotesRuntime) -> tuple[Item, bool]:
-    """One Item per Capture: a Link for exactly one URL, else a Note of the whole text (ADR-0009)."""
+async def _capture_draft(draft: Draft, chat_id: int, notes: NotesRuntime) -> tuple[Item, bool, str]:
+    """One Item per Capture: a Link for exactly one URL, else a Note of the whole text (ADR-0009).
+
+    The last value is the Owner's own words with a Link (its Annotation), which a repeat may use to ask for a reminder.
+    """
     extracted = extract_urls(draft.text, linked=draft.links)
     if len(extracted.urls) == 1:
         capture = await asyncio.to_thread(
@@ -190,7 +221,7 @@ async def _capture_draft(draft: Draft, chat_id: int, notes: NotesRuntime) -> tup
             message_id=draft.message_id,
         )
         log.info("notes: link capture %s → item %s", capture.outcome, capture.item.id)
-        return capture.item, capture.outcome == "new"
+        return capture.item, capture.outcome == "new", extracted.annotation
     note = await asyncio.to_thread(
         items.capture_note,
         notes.db,
@@ -199,16 +230,23 @@ async def _capture_draft(draft: Draft, chat_id: int, notes: NotesRuntime) -> tup
         chat_id=chat_id,
         message_id=draft.message_id,
     )
-    return note, True
+    return note, True, ""
 
 
 async def _settle(
-    bot: Bot, notes: NotesRuntime, chat_id: int, message_id: int, item: Item, is_new: bool
+    bot: Bot,
+    notes: NotesRuntime,
+    chat_id: int,
+    message_id: int,
+    item: Item,
+    is_new: bool,
+    words: str = "",
 ) -> None:
-    """A new Item enriches and its reaction follows; a duplicate is in notes already."""
+    """A new Item enriches and its reaction follows; a duplicate is in notes already, unless it asks for a reminder."""
     if is_new:
         notes.enrich_later(bot, item.id)
         return
+    await notes.request_reminder(bot, item, words, message_id)
     failed = item.enrichment_status == "failed"
     await notes_ui.react(bot, chat_id, message_id, notes_ui.LOOK if failed else notes_ui.DONE)
 
@@ -234,12 +272,12 @@ async def direct_text_handler(message: Message, bot: Bot, notes: NotesRuntime | 
         return
     await notes_ui.react(bot, message.chat.id, message.message_id, notes_ui.WORKING)
     try:
-        item, is_new = await _capture_draft(draft, message.chat.id, notes)
+        item, is_new, words = await _capture_draft(draft, message.chat.id, notes)
     except Exception:
         log.exception("notes: direct save of message %s failed", message.message_id)
         await notes_ui.react(bot, message.chat.id, message.message_id, notes_ui.LOOK)
         return
-    await _settle(bot, notes, message.chat.id, message.message_id, item, is_new)
+    await _settle(bot, notes, message.chat.id, message.message_id, item, is_new, words)
 
 
 def _is_admin_file(message: Message) -> bool:
@@ -393,7 +431,7 @@ async def save_handler(callback: CallbackQuery, bot: Bot, notes: NotesRuntime | 
         await callback.answer("This card has expired — send it again.", show_alert=True)
         return
     try:
-        item, is_new = await _capture_draft(draft, card.chat.id, notes)
+        item, is_new, words = await _capture_draft(draft, card.chat.id, notes)
     except Exception:
         log.exception("notes: saving card %s failed", card.message_id)
         restore_draft(card.chat.id, card.message_id, draft)
@@ -406,7 +444,7 @@ async def save_handler(callback: CallbackQuery, bot: Bot, notes: NotesRuntime | 
     if draft.message_id is not None:
         if is_new:
             await notes_ui.react(bot, card.chat.id, draft.message_id, notes_ui.WORKING)
-        await _settle(bot, notes, card.chat.id, draft.message_id, item, is_new)
+        await _settle(bot, notes, card.chat.id, draft.message_id, item, is_new, words)
     elif is_new:
         notes.enrich_later(bot, item.id)
     await callback.answer()

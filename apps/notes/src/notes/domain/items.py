@@ -506,6 +506,19 @@ def release_reminder(db: Database, item: Item) -> None:
         )
 
 
+def set_reminder(db: Database, item_id: int, due: datetime, *, now: datetime | None = None) -> Item:
+    """A fresh explicit request: the Due replaces any old one and the Item goes back to todo (ADR-0011)."""
+    with db.session() as conn:
+        cur = conn.execute(
+            "UPDATE items SET due_at=?, reminded_at=NULL, status='todo', done_at=NULL, "
+            "updated_at=? WHERE id=?",
+            (stamp(due), stamp(now), item_id),
+        )
+        if cur.rowcount == 0:
+            raise KeyError(item_id)
+        return _fetch(conn, item_id)
+
+
 def claim_due_enrichments(db: Database, *, now: datetime | None = None) -> list[int]:
     """Scheduled retries whose time has come, plus pending Items nothing has touched lately."""
     moment = (now or datetime.now(UTC)).astimezone(UTC)

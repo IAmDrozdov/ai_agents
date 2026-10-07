@@ -15,6 +15,7 @@ from notes.classify.port import (
     ClassifierRefused,
     ClassifierRejected,
     ClassifierUnavailable,
+    DueRequest,
     Filing,
     FilingRequest,
 )
@@ -27,7 +28,25 @@ TIMEOUT_S = 60
 MAX_COMPLETION_TOKENS = 4000
 MAX_SECTIONS = 3
 
-SYSTEM_PROMPT = """\
+DUE_RULE = """\
+- due: момент, когда владельца надо напомнить об этом, по его местному времени в формате \
+YYYY-MM-DDTHH:MM; иначе null. Ставь due только если слова владельца или речь ясно просят \
+напомнить («напомни», «не забыть», «remind me»); «напомни» — сильный признак. Само упоминание \
+времени — не просьба: «встреча в 9 была скучной» → null; «посмотреть потом», «надо прочитать», \
+«когда-нибудь» без просьбы напомнить — тоже null. Отсчитывай от now (момент, когда \
+владелец это сохранил), в его часовом поясе zone:
+  · «через 2 часа», «через пару часов», «через 20 минут» — от now;
+  · только дата или день («завтра», «в пятницу», «10 октября») без часа — 09:00 этого дня; \
+день недели — ближайший такой день, считая со следующего;
+  · «утром» — 09:00, «днём» — 14:00, «вечером» — 19:00;
+  · просьба напомнить без даты и без часа («напомни купить молоко») — завтра в 09:00;
+  · час без даты («напомни в 9»): если он уже прошёл сегодня — этот час завтра;
+  · повторов нет: «каждый понедельник» — ближайший понедельник.
+  due всегда позже now.
+"""
+
+SYSTEM_PROMPT = (
+    """\
 Ты раскладываешь то, что владелец сохранил «на потом» (ссылки, заметки, файлы, голосовые), \
 по его секциям и пишешь суть по-русски.
 
@@ -48,22 +67,23 @@ SYSTEM_PROMPT = """\
 переслал; не копируй его в author.
 - Сначала опирайся на слова владельца и описание. Картинку используй, когда описание пусто \
 или неясно; для профиля или файла без описания она может быть единственным источником.
-- due: момент, когда владельца надо напомнить об этом, по его местному времени в формате \
-YYYY-MM-DDTHH:MM; иначе null. Ставь due только если слова владельца или речь ясно просят \
-напомнить («напомни», «не забыть», «remind me»); «напомни» — сильный признак. Само упоминание \
-времени — не просьба: «встреча в 9 была скучной» → null. Отсчитывай от now (момент, когда \
-владелец это сохранил), в его часовом поясе zone:
-  · «через 2 часа», «через пару часов», «через 20 минут» — от now;
-  · только дата или день («завтра», «в пятницу», «10 октября») без часа — 09:00 этого дня; \
-день недели — ближайший такой день, считая со следующего;
-  · «утром» — 09:00, «днём» — 14:00, «вечером» — 19:00;
-  · просьба напомнить без даты и без часа («напомни купить молоко») — завтра в 09:00;
-  · час без даты («напомни в 9»): если он уже прошёл сегодня — этот час завтра;
-  · повторов нет: «каждый понедельник» — ближайший понедельник.
-  due всегда позже now.
-- confident: false, если по всему имеющемуся нельзя уверенно понять, о чём это, и начало речи \
+"""
+    + DUE_RULE
+    + """- confident: false, если по всему имеющемуся нельзя уверенно понять, о чём это, и начало речи \
 из видео помогло бы.
 """
+)
+
+
+DUE_PROMPT = (
+    "Ты читаешь слова владельца и решаешь, просит ли он напомнить ему о чём-то. Тебе дают text "
+    "(его слова), now и zone.\n\nПравила:\n" + DUE_RULE
+)
+DUE_MAX_COMPLETION_TOKENS = 400
+
+
+class _DueAnswer(BaseModel):
+    due: str | None
 
 
 class _Answer(BaseModel):
@@ -141,6 +161,37 @@ class OpenAIClassifier:
             confident=answer.confident,
             due=parse_due(answer.due),
         )
+
+    async def due(self, request: DueRequest) -> datetime | None:
+        user = json.dumps(
+            {"text": request.text, "now": request.now_local, "zone": request.zone},
+            ensure_ascii=False,
+        )
+        try:
+            response = await self.client.chat.completions.parse(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": DUE_PROMPT},
+                    {"role": "user", "content": user},
+                ],
+                response_format=_DueAnswer,
+                max_completion_tokens=DUE_MAX_COMPLETION_TOKENS,
+            )
+        except (openai.LengthFinishReasonError, openai.ContentFilterFinishReasonError) as exc:
+            raise ClassifierRefused(exc.__class__.__name__) from exc
+        except (
+            openai.RateLimitError,
+            openai.APIConnectionError,
+            openai.InternalServerError,
+        ) as exc:
+            raise ClassifierUnavailable(str(exc)) from exc
+        except openai.APIStatusError as exc:
+            raise ClassifierRejected(f"HTTP {exc.status_code}: {exc.message}") from exc
+        self._log_cost(response)
+        message = response.choices[0].message
+        if message.refusal or message.parsed is None:
+            return None
+        return parse_due(message.parsed.due)
 
     async def _parse(self, request: FilingRequest) -> Any:
         try:

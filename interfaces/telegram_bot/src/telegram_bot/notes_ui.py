@@ -135,8 +135,13 @@ async def send_reminder(bot: Bot, item: Item) -> bool:
     return True
 
 
-async def announce_due(bot: Bot, item: Item, zone: str, *, now: datetime | None = None) -> None:
-    """One line naming the Due a Capture became a Reminder with; a Due already past says nothing."""
+async def announce_due(
+    bot: Bot, item: Item, zone: str, *, now: datetime | None = None, reply_to: int | None = None
+) -> None:
+    """One line naming the Due a Capture became a Reminder with; a Due already past says nothing.
+
+    It replies to the Capture message, or to `reply_to` when a re-sent Link asked for the Due.
+    """
     chat = item.tg_chat_id
     if chat is None or item.due_at is None or item.due_at <= items.stamp(now):
         return
@@ -151,9 +156,10 @@ async def announce_due(bot: Bot, item: Item, zone: str, *, now: datetime | None 
         else None
     )
     text = f"⏰ {format_due(item.due_at, zone)}"
+    target = reply_to if reply_to is not None else item.tg_message_id
     reply = (
-        ReplyParameters(message_id=item.tg_message_id, allow_sending_without_reply=True)
-        if item.tg_message_id is not None
+        ReplyParameters(message_id=target, allow_sending_without_reply=True)
+        if target is not None
         else None
     )
     try:
