@@ -112,7 +112,9 @@ the `miniapp` service through the funnel sidecar: a static shell (`miniapp/stati
 that calls `/api/usage` and `/api/notes/*`. The Заметки tab lists one Status at a time
 («Сделать» | «Готово», newest first) filtered by Sections, pages, edits an item (Sections,
 Annotation, «✓ Готово» / «↩ Вернуть», which also sets or clears `done_at`), re-enriches, and
-deletes it at once behind a confirm (notes ADR-0010). "💬 Показать в чате" sets `show_requested_at` and closes the app; the bot's show
+deletes it at once behind a confirm (notes ADR-0010). While an item on screen is still being
+enriched the app checks back every 3 s, and it reloads the list when it becomes visible again;
+there is no push. "💬 Показать в чате" sets `show_requested_at` and closes the app; the bot's show
 loop (`NotesRuntime.start_show_loop`, every 2 s) replies to the Item's original message, or sends
 the file again by `file_id` if that message is gone (notes ADR-0008). The Секции tab creates, edits, reorders and deletes Sections. Enrichment files an
 Item only while it is in Other alone; once it is anywhere else, re-enrich keeps its Sections.
