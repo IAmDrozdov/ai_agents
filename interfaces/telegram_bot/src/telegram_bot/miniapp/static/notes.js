@@ -10,6 +10,7 @@ import {
   el,
   handleError,
   haptic,
+  isHalted,
   openUrl,
   parseTs,
   reconcile,
@@ -28,6 +29,7 @@ const STATUSES = [
 ];
 const OTHER = "other";
 const STALE_AFTER_MS = 350;
+const PENDING_POLL_MS = 3000;
 // The item fields the top of the item view shows; it is rebuilt only when one of them changes.
 const HEAD_FIELDS = [
   "kind", "url", "title", "text", "source", "author", "gist", "file_name",
@@ -257,6 +259,7 @@ export async function mountNotes(root, launch = {}) {
     more.hidden = !state.failed && state.items.length >= state.total;
     more.disabled = state.loading;
     setText(more, state.failed ? "Повторить" : "Показать ещё");
+    schedulePoll();
   }
 
   // `want` items from `offset`, in requests the server accepts, all under the filter as it is now.
@@ -359,6 +362,7 @@ export async function mountNotes(root, launch = {}) {
   }
 
   async function freshen(id) {
+    if (state.busy) return; // a reply sent before the change lands could undo it on screen
     const version = state.version;
     const rev = state.rev;
     let fresh;
@@ -370,10 +374,60 @@ export async function mountNotes(root, launch = {}) {
     }
     if (version !== state.version || rev !== state.rev || state.busy) return;
     if (JSON.stringify(fresh) !== JSON.stringify(state.detail)) {
+      if (state.detail.enrichment_status === "pending" && fresh.enrichment_status !== "pending") state.dirty = true; // counts moved
       state.detail = fresh;
       syncDetail(fresh);
+      replaceItem(fresh);
     }
   }
+
+  // Enrichment settles within seconds: while an item on screen is still pending, check back quietly.
+  let pollTimer = 0;
+  function schedulePoll() {
+    clearTimeout(pollTimer);
+    if (launch.alive?.() === false || isHalted() || document.visibilityState !== "visible") return;
+    const pending = detailView.hidden
+      ? state.items.some((item) => item.enrichment_status === "pending")
+      : state.detail?.enrichment_status === "pending";
+    if (pending) pollTimer = setTimeout(pollPending, PENDING_POLL_MS);
+  }
+
+  async function pollPending() {
+    if (launch.alive?.() === false) return;
+    try {
+      if (!detailView.hidden) await freshen(state.detail.id);
+      else if (await listSettled()) await refresh();
+    } finally {
+      schedulePoll();
+    }
+  }
+
+  // One request for the loaded page: true once a pending item there is done, failed or gone.
+  async function listSettled() {
+    const query = filterQuery();
+    query.set("limit", String(Math.min(MAX_CHUNK, Math.max(PAGE, state.items.length))));
+    let page;
+    try {
+      page = await api("/notes/items?" + query);
+    } catch (error) {
+      if (error instanceof AuthError) handleError(error); // anything else: try again on the next tick
+      return false;
+    }
+    const pendingNow = new Set(page.items.filter((item) => item.enrichment_status === "pending").map((item) => item.id));
+    return state.items.some((item) => item.enrichment_status === "pending" && !pendingNow.has(item.id));
+  }
+
+  // Back in the app after sending something in the chat: show what arrived meanwhile.
+  function onReturn() {
+    if (launch.alive?.() === false) {
+      document.removeEventListener("visibilitychange", onReturn);
+      return;
+    }
+    if (document.visibilityState !== "visible") return;
+    if (detailView.hidden) refresh();
+    else schedulePoll();
+  }
+  document.addEventListener("visibilitychange", onReturn);
 
   function showDetail(item) {
     state.detail = item;
@@ -386,6 +440,7 @@ export async function mountNotes(root, launch = {}) {
     detailView.hidden = false;
     setBack(closeDetail);
     window.scrollTo(0, 0);
+    schedulePoll();
   }
 
   function closeDetail() {
@@ -398,6 +453,7 @@ export async function mountNotes(root, launch = {}) {
       state.dirty = false;
       refresh();
     }
+    schedulePoll();
   }
 
   // One change at a time: a second tap would be built from state the first one is about to replace.
@@ -606,6 +662,7 @@ export async function mountNotes(root, launch = {}) {
     if (state.draft == null && area.value !== saved) area.value = saved;
     save.disabled = area.value === saved;
     slot(actions, item.status, () => actionNodes(item));
+    schedulePoll();
   }
 
   // --- start ---------------------------------------------------------------

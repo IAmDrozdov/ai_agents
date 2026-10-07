@@ -34,6 +34,9 @@ bot chat's URL) live in `CLAUDE.local.md`, which is gitignored because this repo
   resolves to `100.x`, test, then `--accept-dns=true`.
 
 ## Cleanup
-- Test messages (yours and the bot's, under 48 h old): `send_media.py delete <message_id…>`; the
-  ids are in the snapshot or in `tg_message_id` of the Item (older Items also `tg_ack_message_id`).
+- Test messages (yours and the bot's, under 48 h old): `send_media.py delete <message_id…>` takes
+  **Bot API** ids. Telegram Web's own ids (`data-message-id`, six digits in a private chat) are a
+  different numbering and fail with "message to delete not found". Read `tg_message_id` of the Item
+  (older Items also `tg_ack_message_id`) before the case deletes the Item; a message with no Item
+  goes through the web context menu «Удалить» instead.
 - Test Items: Mini App → item → «Удалить», then confirm (the «Готово» tab holds the done ones).
