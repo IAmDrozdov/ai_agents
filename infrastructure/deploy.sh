@@ -13,7 +13,7 @@ COMPOSE="docker compose -f /opt/ai_agents/src/infrastructure/docker/docker-compo
 APP_UID=10001
 RSYNC_EXCLUDES=(
   --exclude .git --exclude .venv --exclude '.env*' --exclude '__pycache__'
-  --exclude .ruff_cache --exclude .ty_cache --exclude .local --exclude data
+  --exclude .ruff_cache --exclude .ty_cache --exclude .local --exclude .scratch --exclude data
   --exclude node_modules --exclude 'infrastructure/terraform/.terraform'
   --exclude '*.tfstate*' --exclude 'infrastructure/terraform/terraform.tfvars'
   --exclude .DS_Store --exclude dist --exclude .uv-cache
