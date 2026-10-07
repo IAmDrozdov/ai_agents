@@ -16,7 +16,9 @@ bot chat's URL) live in `CLAUDE.local.md`, which is gitignored because this repo
 ## Mechanics
 - Snapshots of the Telegram tab dump the whole chat list. Save them with `filePath` under the
   repo's gitignored `.local/` (the MCP writes only inside the workspace), grep them, delete the
-  named file afterwards.
+  named file afterwards. Do not wait with `wait_for`: it returns the whole snapshot inline, and with
+  the Mini App open that includes the iframe `src` with its `tgWebAppData`. Poll with
+  `take_snapshot` and `filePath` instead.
 - Telegram's buttons ignore a synthetic `.click()`: use the MCP `click` with a uid from a snapshot.
   The menu button shows up as `button "Open bot command keyboard"`.
 - Forwarding: open the message's context menu (right-click, or hover → the arrow), choose Forward,
