@@ -1,4 +1,4 @@
-// Заметки: Section chips, the Status switch, the item list and the item view.
+// Заметки: the Dashboard, the collapsible item list (Status switch, filter pill) and the item view.
 // Nothing is rebuilt on a tap: controls are built once and only change class or text, cards are reused by id.
 
 import {
@@ -20,6 +20,7 @@ import {
   tg,
   toast,
 } from "./core.js";
+import { TIMEZONE, buildDashboard, fmtDay } from "./dashboard.js";
 
 const PAGE = 50;
 const MAX_CHUNK = 100; // the most items the server returns in one request
@@ -135,7 +136,9 @@ export async function mountNotes(root, launch = {}) {
   setBack(null);
   const state = {
     sections: [],
-    selected: new Set(),
+    board: null, // the Dashboard's last response
+    filter: null, // what a Dashboard figure set: { kind: "section", slug } or { kind: "day", field, day }
+    open: false, // the list starts collapsed
     status: "todo",
     items: [],
     total: 0,
@@ -155,58 +158,74 @@ export async function mountNotes(root, launch = {}) {
   detailView.hidden = true;
   root.replaceChildren(listView, detailView);
 
-  const chips = el("div", "chips");
+  const dash = buildDashboard(pickFigure);
+  const listHead = el("button", "list-head");
+  const listBody = el("div");
+  listBody.hidden = true;
   const switcher = el("div", "segmented");
+  const pill = el("div", "pill");
+  const pillText = el("span");
+  const pillClear = el("button", "pill-clear", "× Сбросить");
+  pill.append(pillText, pillClear);
+  pill.hidden = true;
   const list = el("div", "cards");
   const more = el("button", "btn wide", "Показать ещё");
-  listView.append(chips, switcher, list, more);
+  listBody.append(switcher, pill, list, more);
+  listView.append(dash.node, listHead, listBody);
 
-  // --- Status switch and chips ---------------------------------------------
+  // --- Dashboard, list header, filter pill and Status switch ------------------
 
   function filterQuery() {
     const query = new URLSearchParams({ status: state.status });
-    for (const slug of state.selected) query.append("section", slug);
+    const filter = state.filter;
+    if (filter?.kind === "section") query.append("section", filter.slug);
+    if (filter?.kind === "day") {
+      query.set("day", filter.day);
+      query.set("day_field", filter.field);
+      query.set("tz", TIMEZONE);
+    }
     return query;
   }
 
-  const allChip = el("button", "chip filter", "Все");
-  allChip.onclick = () => {
-    state.selected.clear();
-    syncChips();
+  function filterLabel() {
+    const filter = state.filter;
+    if (filter?.kind === "section") {
+      const section = state.sections.find((s) => s.slug === filter.slug);
+      return section ? `${section.emoji} ${section.name}`.trim() : filter.slug;
+    }
+    if (filter?.kind === "day") return `${filter.field === "done" ? "Готово" : "Добавлено"} ${fmtDay(filter.day)}`;
+    return "";
+  }
+
+  // A figure on the Dashboard is the filter: it sets the list's state, opens the list and brings it into view.
+  function pickFigure(kind, value) {
+    haptic("select");
+    if (kind === "todo") {
+      state.filter = null;
+      state.status = "todo";
+    } else if (kind === "section") {
+      state.filter = { kind: "section", slug: value };
+      state.status = "todo";
+    } else {
+      state.filter = { kind: "day", field: kind, day: value };
+      state.status = kind === "done" ? "done" : "todo";
+    }
+    state.open = true;
+    syncControls();
+    load(true);
+    listHead.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  pillClear.onclick = () => {
+    state.filter = null;
+    syncControls();
     load(true);
   };
-  chips.append(allChip);
-  const chipButtons = new Map(); // slug -> button
-  let chipsKey = "";
 
-  function syncChips() {
-    const key = state.sections.map((s) => `${s.slug}|${s.emoji}|${s.name}|${s.color}`).join("\n");
-    if (key !== chipsKey) {
-      chipsKey = key;
-      const left = chips.scrollLeft;
-      chipButtons.clear();
-      chips.replaceChildren(allChip);
-      for (const section of state.sections) {
-        const button = el("button", "chip filter");
-        button.style.setProperty("--chip", section.color);
-        button.onclick = () => {
-          if (!state.selected.delete(section.slug)) state.selected.add(section.slug);
-          syncChips();
-          load(true);
-        };
-        chipButtons.set(section.slug, button);
-        chips.append(button);
-      }
-      chips.scrollLeft = left;
-    }
-    allChip.classList.toggle("on", state.selected.size === 0);
-    for (const section of state.sections) {
-      const button = chipButtons.get(section.slug);
-      const count = state.status === "todo" ? ` · ${section.todo_count}` : "";
-      button.classList.toggle("on", state.selected.has(section.slug));
-      setText(button, `${section.emoji} ${section.name}${count}`);
-    }
-  }
+  listHead.onclick = () => {
+    state.open = !state.open;
+    syncControls();
+  };
 
   const statusTabs = new Map();
   for (const [value, label] of STATUSES) {
@@ -222,8 +241,14 @@ export async function mountNotes(root, launch = {}) {
   }
 
   function syncControls() {
+    const doneDay = state.filter?.kind === "day" && state.filter.field === "done"; // only done Items can match
     for (const [value, button] of statusTabs) button.classList.toggle("on", state.status === value);
-    syncChips();
+    switcher.hidden = doneDay;
+    pill.hidden = !state.filter;
+    setText(pillText, filterLabel());
+    listBody.hidden = !state.open;
+    setText(listHead, `${state.open ? "▾" : "▸"} Записи · ${state.total}`);
+    dash.update(state.board, state.sections);
   }
 
   // --- list ----------------------------------------------------------------
@@ -243,7 +268,7 @@ export async function mountNotes(root, launch = {}) {
   function emptyText() {
     if (state.loading) return "Загрузка…";
     if (state.failed) return "Не удалось загрузить список.";
-    if (state.selected.size) return "Под фильтр ничего не попало.";
+    if (state.filter) return "Под фильтр ничего не попало.";
     return state.status === "todo" ? "Пока пусто. Кинь боту ссылку или заметку." : "Тут пусто.";
   }
 
@@ -259,6 +284,7 @@ export async function mountNotes(root, launch = {}) {
     more.hidden = !state.failed && state.items.length >= state.total;
     more.disabled = state.loading;
     setText(more, state.failed ? "Повторить" : "Показать ещё");
+    syncControls();
     schedulePoll();
   }
 
@@ -316,18 +342,28 @@ export async function mountNotes(root, launch = {}) {
   async function loadSections() {
     const data = await attempt(() => api("/notes/sections"));
     if (data) state.sections = data.sections;
-    syncChips();
+    syncControls();
+  }
+
+  let boardTicket = 0; // a slower, older reply must not overwrite a newer one
+  async function loadBoard() {
+    const ticket = ++boardTicket;
+    const data = await attempt(() => api("/notes/dashboard?" + new URLSearchParams({ tz: TIMEZONE })));
+    if (data && ticket === boardTicket) state.board = data;
+    syncControls();
   }
 
   // Reloads what is on screen (at least as many items, so the scroll position stays valid).
   function refresh() {
-    return Promise.all([loadSections(), load(true, Math.max(PAGE, state.items.length), true)]);
+    return Promise.all([loadSections(), loadBoard(), load(true, Math.max(PAGE, state.items.length), true)]);
   }
 
   // The server's filter, mirrored: an item that no longer fits is gone before the list is shown again.
+  // A day filter is judged by Status alone: an edit never moves an Item to another day without changing its Status.
   function matchesFilter(item) {
     if (item.status !== state.status) return false;
-    return !state.selected.size || item.sections.some((section) => state.selected.has(section.slug));
+    const filter = state.filter;
+    return filter?.kind !== "section" || item.sections.some((section) => section.slug === filter.slug);
   }
 
   // An item keeps its place while it fits the filter (the order is by creation) and leaves the list once not.
@@ -671,6 +707,6 @@ export async function mountNotes(root, launch = {}) {
   more.onclick = () => load(state.failed && !state.items.length);
   more.hidden = true;
   syncControls();
-  await Promise.all([loadSections(), load(true)]);
+  await Promise.all([loadSections(), loadBoard(), load(true)]);
   if (launch.itemId) await openById(launch.itemId);
 }

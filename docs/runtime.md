@@ -109,11 +109,16 @@ Language: the bot UI is English; notes texts and the Mini App are Russian.
 While `BOT_MINIAPP_URL` is set, the bot gives the admin's chat a `📒` menu button
 (`__main__.set_admin_menu_button`, at startup, for that chat only). It opens
 the `miniapp` service through the funnel sidecar: a static shell (`miniapp/static`, vanilla JS)
-that calls `/api/usage` and `/api/notes/*`. The Заметки tab lists one Status at a time
-(«Сделать» | «Готово», newest first) filtered by Sections, pages, edits an item (Sections,
+that calls `/api/usage` and `/api/notes/*`. The Заметки tab opens on the Dashboard
+(`GET /api/notes/dashboard?tz=<IANA zone>`): the todo count, two 26-week heatmaps of Items Captured
+and done per day (days in the Owner's time zone, from `created_at` and `done_at`), and a bar per
+Section with todo Items (`todo_count` from `/api/notes/sections`). The Dashboard is the filter:
+tapping the count, a bar or a heatmap cell opens the collapsed list below it, filtered, with a
+«× Сбросить» pill. The list shows one Status at a time («Сделать» | «Готово», newest first),
+pages, edits an item (Sections,
 Annotation, «✓ Готово» / «↩ Вернуть», which also sets or clears `done_at`), re-enriches, and
 deletes it at once behind a confirm (notes ADR-0010). While an item on screen is still being
-enriched the app checks back every 3 s, and it reloads the list when it becomes visible again;
+enriched the app checks back every 3 s, and it reloads the list and the Dashboard when it becomes visible again;
 there is no push. "💬 Показать в чате" sets `show_requested_at` and closes the app; the bot's show
 loop (`NotesRuntime.start_show_loop`, every 2 s) replies to the Item's original message, or sends
 the file again by `file_id` if that message is gone (notes ADR-0008). The Секции tab creates, edits, reorders and deletes Sections. Enrichment files an

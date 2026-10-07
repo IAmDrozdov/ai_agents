@@ -85,7 +85,11 @@ _Avoid_: provider, origin, site
 
 **Status**:
 Whether the Owner has taken an Item up yet: todo, or done once they have — a series they started watching is done. There is no in-progress value.
-_Avoid_: state, stage, progress, viewed, started, archived
+_Avoid_: state, stage, progress, viewed, started, archived, open, closed
+
+**Dashboard**:
+The top of the Mini App's notes tab: how many Items are todo, how many were Captured and done each day, and how the todo Items spread over Sections; tapping a figure filters the list below it.
+_Avoid_: overview, home, stats, обзор
 
 **Browse**:
 Reading Sections and Items from inside the bot.

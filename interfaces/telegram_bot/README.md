@@ -108,8 +108,9 @@ The admin's chat has a `📒` menu button while `BOT_MINIAPP_URL` is set. It ope
 - `GET /` and `/static/*` — the shell; public, no data
 - `GET /healthz`
 - `GET /api/usage` — totals, per-user spend and job history
+- `GET /api/notes/dashboard` (`tz`: todo count and Items Captured / done per local day, 26 weeks)
 - `GET /api/notes/sections` (with `todo_count`), `GET /api/notes/items` (filters: section, status
-  `todo` by default; paged), `GET /api/notes/items/{id}`
+  `todo` by default, `day` + `day_field` captured|done + `tz`; paged), `GET /api/notes/items/{id}`
 - `PATCH /api/notes/items/{id}` (Sections, Status, text), `DELETE /api/notes/items/{id}`,
   `POST /api/notes/items/{id}/reenrich`
 - `POST /api/notes/sections`, `PATCH /api/notes/sections/{id}`, `PUT /api/notes/sections/order`,

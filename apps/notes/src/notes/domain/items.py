@@ -5,8 +5,9 @@ from __future__ import annotations
 import sqlite3
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta, tzinfo
 from typing import Literal
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from notes.db import Database
 from notes.domain.sections import OTHER_SLUG, Section, _row_to_section, other_id
@@ -16,6 +17,8 @@ Kind = Literal["link", "note", "file", "voice"]
 Status = Literal["todo", "done"]
 EnrichmentStatus = Literal["pending", "done", "failed", "skipped"]
 CaptureOutcome = Literal["new", "existing"]
+DayField = Literal["captured", "done"]
+DAY_COLUMNS: dict[DayField, str] = {"captured": "created_at", "done": "done_at"}
 
 TIMESTAMP = "%Y-%m-%d %H:%M:%S"
 BACKOFF = (
@@ -73,10 +76,13 @@ class Capture:
 
 @dataclass(frozen=True)
 class ItemFilter:
-    """Which Items a list covers: one Status, and any of the listed Sections if there are some."""
+    """Which Items a list covers: one Status, any listed Section, and one local day if set."""
 
     sections: tuple[str, ...] = ()
     status: Status = "todo"
+    day: date | None = None
+    day_field: DayField = "captured"
+    tz: str = "UTC"
 
 
 @dataclass(frozen=True)
@@ -456,6 +462,20 @@ def get_item(db: Database, item_id: int) -> Item | None:
             return None
 
 
+def zone(name: str) -> tzinfo:
+    """The named IANA zone, or UTC when it is unknown."""
+    try:
+        return ZoneInfo(name)
+    except (ZoneInfoNotFoundError, ValueError, OSError):
+        return UTC
+
+
+def local_midnight_utc(day: date, tz: str) -> str:
+    """The UTC timestamp at which `day` starts in zone `tz`."""
+    start = datetime(day.year, day.month, day.day, tzinfo=zone(tz))
+    return stamp(start)
+
+
 def _where(flt: ItemFilter) -> tuple[str, list[object]]:
     clauses = ["status=?"]
     params: list[object] = [flt.status]
@@ -466,6 +486,15 @@ def _where(flt: ItemFilter) -> tuple[str, list[object]]:
             f"JOIN sections s ON s.id=x.section_id WHERE s.slug IN ({marks}))"
         )
         params.extend(flt.sections)
+    if flt.day is not None:
+        column = DAY_COLUMNS[flt.day_field]
+        clauses.append(f"{column} >= ? AND {column} < ?")
+        params.extend(
+            [
+                local_midnight_utc(flt.day, flt.tz),
+                local_midnight_utc(flt.day + timedelta(1), flt.tz),
+            ]
+        )
     return " AND ".join(clauses), params
 
 

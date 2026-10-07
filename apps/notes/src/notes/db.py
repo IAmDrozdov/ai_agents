@@ -63,6 +63,7 @@ CREATE TABLE IF NOT EXISTS sections (
 CREATE UNIQUE INDEX IF NOT EXISTS items_url_normalized
     ON items(url_normalized) WHERE url_normalized IS NOT NULL;
 CREATE INDEX IF NOT EXISTS items_status ON items(status, created_at DESC);
+CREATE INDEX IF NOT EXISTS items_done_at ON items(done_at) WHERE done_at IS NOT NULL;
 CREATE INDEX IF NOT EXISTS items_enrich ON items(enrichment_status, next_enrich_at);
 CREATE INDEX IF NOT EXISTS items_show
     ON items(show_requested_at) WHERE show_requested_at IS NOT NULL;
@@ -166,4 +167,9 @@ class Database:
             if "done_at" not in _items_sql(conn):
                 _migrate_items(conn)
             conn.executescript(SCHEMA)
+            filled = conn.execute(
+                "UPDATE items SET done_at=updated_at WHERE status='done' AND done_at IS NULL"
+            ).rowcount
+            if filled:
+                log.info("notes db: gave %d done items a done_at from updated_at", filled)
         seed_sections(self)

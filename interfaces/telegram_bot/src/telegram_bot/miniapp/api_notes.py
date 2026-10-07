@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+from datetime import date
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, ConfigDict, Field
 
 from notes.db import Database
+from notes.domain import dashboard as dashboard_read
 from notes.domain import items, sections
-from notes.domain.items import Item, ItemFilter, Status
+from notes.domain.items import DayField, Item, ItemFilter, Status
 
 from .auth import require_admin
 
@@ -97,15 +99,34 @@ def remove_section(section_id: int, db: DbDep) -> None:
         raise HTTPException(status_code=404, detail="Section not found")
 
 
+@router.get("/dashboard")
+def get_dashboard(db: DbDep, tz: Annotated[str, Query(max_length=64)] = "UTC") -> dict[str, Any]:
+    board = dashboard_read.dashboard(db, tz)
+    return {
+        "todo": board.todo,
+        "captured": board.captured,
+        "done": board.done,
+        "from": board.first.isoformat(),
+        "to": board.last.isoformat(),
+    }
+
+
 @router.get("/items")
 def get_items(
     db: DbDep,
     section: Annotated[list[str] | None, Query(max_length=50)] = None,
     status: Status = "todo",
+    day: date | None = None,
+    day_field: DayField = "captured",
+    tz: Annotated[str, Query(max_length=64)] = "UTC",
     offset: Annotated[int, Query(ge=0)] = 0,
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
 ) -> dict[str, Any]:
-    flt = ItemFilter(sections=tuple(section or ()), status=status)
+    if day is not None and not date(2000, 1, 1) <= day <= date(2100, 1, 1):
+        raise HTTPException(status_code=422, detail="day out of range")
+    flt = ItemFilter(
+        sections=tuple(section or ()), status=status, day=day, day_field=day_field, tz=tz
+    )
     page = items.query(db, flt, offset=offset, limit=limit)
     return {"items": [asdict(item) for item in page.items], "total": page.total}
 
