@@ -79,6 +79,10 @@ class Item:
     updated_at: str
     sections: tuple[Section, ...]
 
+    def is_overdue(self, now: datetime | None = None) -> bool:
+        """Todo with a Due that has passed: read off the clock, never stored (ADR-0011)."""
+        return self.status == "todo" and self.due_at is not None and self.due_at <= stamp(now)
+
 
 @dataclass(frozen=True)
 class Capture:
@@ -98,6 +102,7 @@ class ItemFilter:
     day_field: DayField = "captured"
     tz: str = "UTC"
     text: str = ""
+    overdue: bool = False  # only Overdue Items (ADR-0011); implies todo and spans every Section
 
 
 @dataclass(frozen=True)
@@ -514,9 +519,12 @@ def local_midnight_utc(day: date, tz: str) -> str:
     return stamp(start)
 
 
-def _where(flt: ItemFilter) -> tuple[str, list[object]]:
+def _where(flt: ItemFilter, now: datetime | None = None) -> tuple[str, list[object]]:
     clauses = ["1"]
     params: list[object] = []
+    if flt.overdue:
+        clauses.append("status='todo' AND due_at IS NOT NULL AND due_at <= ?")
+        params.append(stamp(now))
     if flt.status is not None:
         clauses.append("status=?")
         params.append(flt.status)
@@ -543,13 +551,22 @@ def _where(flt: ItemFilter) -> tuple[str, list[object]]:
     return " AND ".join(clauses), params
 
 
-def query(db: Database, flt: ItemFilter | None = None, *, offset: int = 0, limit: int = 50) -> Page:
-    """Items the filter covers, newest first."""
-    where, params = _where(flt or ItemFilter())
+def query(
+    db: Database,
+    flt: ItemFilter | None = None,
+    *,
+    offset: int = 0,
+    limit: int = 50,
+    now: datetime | None = None,
+) -> Page:
+    """Items the filter covers, newest first; Overdue ones earliest Due first."""
+    flt = flt or ItemFilter()
+    where, params = _where(flt, now)
+    order = "due_at ASC, id ASC" if flt.overdue else "created_at DESC, id DESC"
     with db.session(readonly=True) as conn:
         total = int(conn.execute(f"SELECT COUNT(*) FROM items WHERE {where}", params).fetchone()[0])
         rows = conn.execute(
-            f"SELECT * FROM items WHERE {where} ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?",
+            f"SELECT * FROM items WHERE {where} ORDER BY {order} LIMIT ? OFFSET ?",
             [*params, limit, offset],
         ).fetchall()
         return Page(items=[_row_to_item(conn, row) for row in rows], total=total)

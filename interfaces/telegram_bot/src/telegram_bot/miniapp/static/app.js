@@ -1,6 +1,7 @@
 // Entry: checks the Telegram launch, then draws the tabs and ⚙️. A tab is mounted once per launch and keeps its
 // state while another is shown; «Расходы» opens over the tabs and Telegram's back button returns.
 
+import { OVERDUE } from "./cards.js";
 import { el, handleError, isHalted, prepareShell, setBack, showMessage, tg } from "./core.js";
 import { mountDashboard } from "./dashboard.js";
 import { mountNotes } from "./notes.js";
@@ -29,7 +30,11 @@ function boot() {
   let ticket = 0;
 
   const contexts = {
-    dashboard: { openSection: (slug) => select("notes", { expand: slug }), isCurrent: () => current === "dashboard" },
+    dashboard: {
+      openSection: (slug) => select("notes", { expand: slug }),
+      openOverdue: () => select("notes", { expand: OVERDUE }),
+      isCurrent: () => current === "dashboard",
+    },
     notes: { isCurrent: () => current === "notes" },
   };
 

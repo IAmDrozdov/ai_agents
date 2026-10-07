@@ -1,4 +1,4 @@
-// Дашборд: todo headline, two day heatmaps on one scale, Section bars. Only a Section bar is tappable.
+// Дашборд: todo headline, two day heatmaps on one scale, Section bars. Only a Section bar and «просрочено» are tappable.
 
 import { api, attempt, el, setText, slot } from "./core.js";
 
@@ -86,13 +86,15 @@ function heatmap(series, board, max, field) {
   return svg;
 }
 
-// Returns { node, update(board, sections) }; onSection(slug) runs when a Section bar is tapped.
-function buildDashboard(onSection) {
+// Returns { node, update(board, sections) }; onSection(slug) runs when a Section bar is tapped, onOverdue() on «просрочено».
+function buildDashboard(onSection, onOverdue) {
   const node = el("div", "board");
 
   const headline = el("div", "headline");
   const headNumber = el("span", "headline-n");
-  headline.append(headNumber, el("span", "headline-label", "Сделать"));
+  const overdueButton = el("button", "headline-overdue");
+  overdueButton.onclick = onOverdue;
+  headline.append(headNumber, el("span", "headline-label", "Сделать"), overdueButton);
 
   const hint = el("p", "empty");
   hint.hidden = true;
@@ -108,6 +110,8 @@ function buildDashboard(onSection) {
   function update(board, sections) {
     if (!board) return;
     setText(headNumber, String(board.todo));
+    overdueButton.hidden = !board.overdue;
+    setText(overdueButton, `просрочено: ${board.overdue}`);
     const max = Math.max(0, ...Object.values(board.captured), ...Object.values(board.done));
     const shown = sections.filter((section) => section.todo_count > 0).sort((a, b) => b.todo_count - a.todo_count);
     hint.textContent = EMPTY_HINT;
@@ -139,10 +143,10 @@ function buildDashboard(onSection) {
   return { node, update };
 }
 
-// ctx.openSection(slug) opens Заметки with that Section expanded; ctx.isCurrent() is false while another tab shows.
+// ctx.openSection(slug) opens Заметки with that Section expanded, ctx.openOverdue() with the «Просрочено» row; ctx.isCurrent() is false while another tab shows.
 // Returns { show, hide }; show reloads the figures.
 export async function mountDashboard(root, ctx) {
-  const dash = buildDashboard(ctx.openSection);
+  const dash = buildDashboard(ctx.openSection, ctx.openOverdue);
   root.replaceChildren(dash.node);
   let ticket = 0; // a slower, older reply must not overwrite a newer one
 

@@ -3,6 +3,7 @@
 import { api, apiImageUrl, attempt, el, openUrl, parseTs } from "./core.js";
 
 export const OTHER = "other";
+export const OVERDUE = "__overdue"; // the slug of the «Просрочено» row, which is not a Section
 
 export const isHttp = (url) => /^https?:\/\//i.test(url || "");
 export const itemTitle = (item) =>
@@ -98,7 +99,10 @@ export function card(item, opts) {
 
   const meta = el("div", "meta");
   if (opts.markDone && item.status === "done") meta.append(el("span", "badge ok", "✓ готово"));
-  if (item.due_at) meta.append(el("span", "badge due", "⏰ " + fmtDue(item.due_at)));
+  if (item.due_at) {
+    const late = item.overdue;
+    meta.append(el("span", late ? "badge late" : "badge due", `⏰ ${late ? "просрочено · " : ""}${fmtDue(item.due_at)}`));
+  }
   for (const section of item.sections) if (section.slug !== opts.under) meta.append(sectionChip(section));
   if (meta.childElementCount) body.append(meta);
 

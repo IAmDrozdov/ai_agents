@@ -2,7 +2,7 @@
 // mode that reorders Sections by drag and drop. The state lives in memory for one launch.
 
 import { AuthError, api, attempt, el, handleError, haptic, isHalted, reconcile, setText, toast } from "./core.js";
-import { card, sectionLabel } from "./cards.js";
+import { OVERDUE, card, sectionLabel } from "./cards.js";
 import { openDetail } from "./detail.js";
 import { openSectionForm } from "./sections.js";
 
@@ -48,6 +48,12 @@ export async function mountNotes(root, ctx) {
     after: null, // what shown() does once the pane is on screen
   };
   const groups = new Map(); // slug -> group
+  // «Просрочено» is a group too, but not a Section: it lists every Overdue Item once, loaded even while collapsed
+  // so its count shows, and it is not on the Owner's list of Sections.
+  const overdue = makeGroup({ slug: OVERDUE, name: "Просрочено", emoji: "⏰", color: "var(--danger)", todo_count: 0 });
+  overdue.node.classList.add("overdue");
+  overdue.switcher.hidden = true;
+  groups.set(OVERDUE, overdue);
 
   const main = el("div");
   const overlay = el("div");
@@ -150,7 +156,7 @@ export async function mountNotes(root, ctx) {
     g.body.hidden = !open;
     if (!open) return;
 
-    g.switcher.hidden = inSearch;
+    g.switcher.hidden = inSearch || g === overdue;
     for (const [value, button] of g.segs) button.classList.toggle("on", value === status);
     const items = inSearch ? found : g.items;
     const live = new Set(items.map((item) => item.id));
@@ -181,6 +187,10 @@ export async function mountNotes(root, ctx) {
   function render() {
     const found = searching() ? resultsBySection() : null;
     const nodes = [];
+    if (!found && !state.editing) {
+      renderGroup(overdue, null);
+      if (overdue.section.todo_count > 0) nodes.push(overdue.node);
+    }
     for (const section of state.sections) {
       let g = groups.get(section.slug);
       if (!g) {
@@ -193,7 +203,7 @@ export async function mountNotes(root, ctx) {
       nodes.push(g.node);
     }
     const slugs = new Set(state.sections.map((section) => section.slug));
-    for (const slug of groups.keys()) if (!slugs.has(slug)) groups.delete(slug);
+    for (const slug of groups.keys()) if (slug !== OVERDUE && !slugs.has(slug)) groups.delete(slug);
     if (!drag) reconcile(accordion, nodes);
 
     search.hidden = state.editing;
@@ -223,7 +233,7 @@ export async function mountNotes(root, ctx) {
       if (ticket === g.ticket) g.list.classList.add("stale");
     };
     const staleTimer = reset && g.items.length ? setTimeout(dim, STALE_AFTER_MS) : null;
-    const base = new URLSearchParams({ section: g.slug, status });
+    const base = g === overdue ? new URLSearchParams({ overdue: "true" }) : new URLSearchParams({ section: g.slug, status });
     const data = await attempt(() => fetchItems(base, reset ? 0 : g.items.length, want));
     clearTimeout(staleTimer);
     if (ticket !== g.ticket) return;
@@ -277,7 +287,7 @@ export async function mountNotes(root, ctx) {
     await loadSections();
     const jobs = [];
     for (const g of groups.values()) {
-      if (state.expanded.has(g.slug)) jobs.push(loadGroup(g, true, Math.max(PAGE, g.items.length), true));
+      if (state.expanded.has(g.slug) || g === overdue) jobs.push(loadGroup(g, true, Math.max(PAGE, g.items.length), true));
       else {
         g.ticket += 1; // an expand load still in flight answers from before the change
         g.loading = false;
@@ -374,7 +384,8 @@ export async function mountNotes(root, ctx) {
     schedulePoll();
   }
 
-  const fits = (item, g) => item.status === statusOf(g.slug) && item.sections.some((s) => s.slug === g.slug);
+  const fits = (item, g) =>
+    g === overdue ? item.overdue : item.status === statusOf(g.slug) && item.sections.some((s) => s.slug === g.slug);
 
   // An item keeps its place while it still fits a Section's list and leaves it once not; the refresh that follows
   // brings it into the lists it moved to and corrects the counts.
@@ -386,6 +397,7 @@ export async function mountNotes(root, ctx) {
       else {
         g.items.splice(at, 1);
         g.total = Math.max(0, g.total - 1);
+        if (g === overdue) g.section.todo_count = g.total;
       }
     }
     if (state.results) {
@@ -399,6 +411,7 @@ export async function mountNotes(root, ctx) {
       const before = g.items.length;
       g.items = g.items.filter((item) => item.id !== id);
       g.total = Math.max(0, g.total - (before - g.items.length));
+      if (g === overdue) g.section.todo_count = g.total;
     }
     if (state.results) {
       const before = state.results.items.length;

@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 
 from notes.db import Database
-from notes.domain.items import DAY_COLUMNS, DayField, local_midnight_utc, zone
+from notes.domain.items import DAY_COLUMNS, DayField, local_midnight_utc, stamp, zone
 
 WEEKS = 26
 
@@ -16,6 +16,7 @@ WEEKS = 26
 @dataclass(frozen=True)
 class Dashboard:
     todo: int
+    overdue: int
     captured: dict[str, int]
     done: dict[str, int]
     first: date
@@ -55,8 +56,16 @@ def dashboard(
     first, last = window(today, weeks)
     with db.session(readonly=True) as conn:
         todo = int(conn.execute("SELECT COUNT(*) FROM items WHERE status='todo'").fetchone()[0])
+        overdue = int(
+            conn.execute(
+                "SELECT COUNT(*) FROM items WHERE status='todo' AND due_at IS NOT NULL "
+                "AND due_at <= ?",
+                (stamp(now),),
+            ).fetchone()[0]
+        )
         return Dashboard(
             todo=todo,
+            overdue=overdue,
             captured=_by_day(conn, "captured", tz, first, last),
             done=_by_day(conn, "done", tz, first, last),
             first=first,

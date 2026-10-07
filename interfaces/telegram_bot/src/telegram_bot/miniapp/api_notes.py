@@ -61,7 +61,7 @@ DbDep = Annotated[Database, Depends(get_db)]
 
 def _item_json(item: Item) -> dict[str, Any]:
     """An Item as the page reads it: the Due as ISO UTC, the rest as stored."""
-    data = asdict(item)
+    data = asdict(item) | {"overdue": item.is_overdue()}
     if item.due_at:
         data["due_at"] = _iso(item.due_at)
     return data
@@ -127,6 +127,7 @@ def get_dashboard(db: DbDep, tz: Annotated[str, Query(max_length=64)] = "UTC") -
     board = dashboard_read.dashboard(db, tz)
     return {
         "todo": board.todo,
+        "overdue": board.overdue,
         "captured": board.captured,
         "done": board.done,
         "from": board.first.isoformat(),
@@ -140,6 +141,7 @@ def get_items(
     section: Annotated[list[str] | None, Query(max_length=50)] = None,
     status: Status = "todo",
     q: Annotated[str, Query(max_length=200)] = "",
+    overdue: bool = False,
     day: date | None = None,
     day_field: DayField = "captured",
     tz: Annotated[str, Query(max_length=64)] = "UTC",
@@ -148,14 +150,17 @@ def get_items(
 ) -> dict[str, Any]:
     if day is not None and not date(2000, 1, 1) <= day <= date(2100, 1, 1):
         raise HTTPException(status_code=422, detail="day out of range")
-    flt = ItemFilter(
-        sections=tuple(section or ()),
-        status=None if q.strip() else status,  # Search covers both Statuses
-        day=day,
-        day_field=day_field,
-        tz=tz,
-        text=q,
-    )
+    if overdue:  # the Overdue row: every Section, todo only, earliest Due first
+        flt = ItemFilter(status="todo", overdue=True)
+    else:
+        flt = ItemFilter(
+            sections=tuple(section or ()),
+            status=None if q.strip() else status,  # Search covers both Statuses
+            day=day,
+            day_field=day_field,
+            tz=tz,
+            text=q,
+        )
     page = items.query(db, flt, offset=offset, limit=limit)
     return {"items": [_item_json(item) for item in page.items], "total": page.total}
 

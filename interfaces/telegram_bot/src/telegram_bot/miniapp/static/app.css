@@ -127,6 +127,17 @@ button { font: inherit; color: inherit; cursor: pointer; }
 }
 .headline-n { font-size: 40px; font-weight: 700; line-height: 1.1; font-variant-numeric: tabular-nums; }
 .headline-label { color: var(--hint); font-size: 15px; }
+.headline-overdue {
+  margin-left: auto;
+  min-height: 32px;
+  padding: 2px 12px;
+  border: 1px solid var(--danger);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--danger);
+  font-size: 14px;
+  align-self: center;
+}
 .box { padding: 12px; background: var(--card); border-radius: var(--radius); }
 .box h3 { margin: 0 0 8px; font-size: 13px; font-weight: 600; color: var(--hint); }
 .heat { display: block; width: 100%; height: auto; }
@@ -192,6 +203,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .caret { flex: none; width: 1em; color: var(--hint); }
 .group-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .group-n { flex: none; color: var(--hint); font-weight: 400; font-variant-numeric: tabular-nums; }
+.group.overdue .group-name { color: var(--danger); }
 .group.dim .group-name, .group.dim .group-n { opacity: 0.45; }
 .group-body { padding: 8px 0 6px; }
 .group-body .segmented { margin: 0 0 10px; }
@@ -250,6 +262,7 @@ a.title { color: var(--link); text-decoration: none; }
 .badge.err { color: var(--danger); border-color: var(--danger); }
 .badge.run { color: var(--hint); }
 .badge.due { color: var(--hint); }
+.badge.late { color: var(--danger); border-color: var(--danger); }
 
 .card.clickable { cursor: pointer; }
 .btn:disabled { opacity: 0.45; cursor: default; }
