@@ -71,7 +71,7 @@ export async function mountSections(root) {
     swatch.style.setProperty("--chip", section.color);
     const body = el("div", "section-body");
     body.append(el("div", "title", `${section.emoji} ${section.name}`.trim()));
-    const count = `${section.active_count} ${plural(section.active_count, "запись", "записи", "записей")}`;
+    const count = `${section.todo_count} ${plural(section.todo_count, "запись", "записи", "записей")}`;
     body.append(el("div", "hint", [section.hint, count].filter(Boolean).join(" · ")));
 
     const actions = el("div", "row-actions");
@@ -155,7 +155,7 @@ export async function mountSections(root) {
       }
       const next = [...state.sections];
       const at = next.findIndex((s) => s.slug === OTHER);
-      next.splice(at < 0 ? next.length : at, 0, { ...saved, active_count: 0 });
+      next.splice(at < 0 ? next.length : at, 0, { ...saved, todo_count: 0 });
       changed(next);
     };
     actions.append(save);

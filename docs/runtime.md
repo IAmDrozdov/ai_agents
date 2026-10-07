@@ -84,7 +84,7 @@ else `capture_note` with the whole text. Files and voice (`file_handler`, `voice
 through `capture_file` / `capture_voice`. Then `enrich_later` → `notes.enrich.pipeline.enrich_item`. The bot sends no message: the Acknowledgement
 is its one reaction on the admin's message (`notes_ui.react`): ✍ working, 👌 in notes, 👎 take a
 look (notes ADR-0009). A duplicate gets 👌 at once with no Enrichment (👎 if its Enrichment had
-failed), and an archived or trashed one goes back to active. A Capture that throws, or notes being down, gets 👎. Enrichment:
+failed), and keeps its Status, `done` included. A Capture that throws, or notes being down, gets 👎. Enrichment:
 
 1. The provider fetch runs through the SSRF guard: YouTube and TikTok oEmbed, the Instagram
    captioned embed page, or a generic page. A Voice is downloaded from Telegram instead (the bot
@@ -99,8 +99,8 @@ Failures go to `schedule_retry` (backoff 1 min → 12 h, then `failed`). The swe
 (`NOTES_ENRICH_SWEEP_SECONDS`) retries anything due and anything a restart interrupted; a retry
 leaves ✍ in place. `apps/*` never imports aiogram: the bot passes `notify` and `download` in as
 callbacks. If notes fails to start, the bot runs without it: direct messages get 👎, a link still
-gets its card, and 💾 answers "Notes are unavailable". The `NotesCB` handlers (🤖, ↩️) stay only
-for buttons on old Acknowledgement messages.
+gets its card, and 💾 answers "Notes are unavailable". The `NotesCB` handlers stay only for
+buttons on old Acknowledgement messages: 🤖 still works, ↩️ only removes itself (notes ADR-0010).
 
 Language: the bot UI is English; notes texts and the Mini App are Russian.
 
@@ -109,12 +109,13 @@ Language: the bot UI is English; notes texts and the Mini App are Russian.
 While `BOT_MINIAPP_URL` is set, the bot gives the admin's chat a `📒` menu button
 (`__main__.set_admin_menu_button`, at startup, for that chat only). It opens
 the `miniapp` service through the funnel sidecar: a static shell (`miniapp/static`, vanilla JS)
-that calls `/api/usage` and `/api/notes/*`. The Заметки tab filters, pages, edits an item
-(Sections, Status, Placement, Annotation, Reviewed), re-enriches, deletes a trashed one, and runs
-the bulk actions. "💬 Показать в чате" sets `show_requested_at` and closes the app; the bot's show
+that calls `/api/usage` and `/api/notes/*`. The Заметки tab lists one Status at a time
+(«Сделать» | «Готово», newest first) filtered by Sections, pages, edits an item (Sections,
+Annotation, «✓ Готово» / «↩ Вернуть», which also sets or clears `done_at`), re-enriches, and
+deletes it at once behind a confirm (notes ADR-0010). "💬 Показать в чате" sets `show_requested_at` and closes the app; the bot's show
 loop (`NotesRuntime.start_show_loop`, every 2 s) replies to the Item's original message, or sends
-the file again by `file_id` if that message is gone (notes ADR-0008). The Секции tab creates, edits, reorders and deletes Sections. Enrichment never
-overwrites the Sections of an Item the Owner has already reviewed.
+the file again by `file_id` if that message is gone (notes ADR-0008). The Секции tab creates, edits, reorders and deletes Sections. Enrichment files an
+Item only while it is in Other alone; once it is anywhere else, re-enrich keeps its Sections.
 
 Every `/api` call carries `Authorization: tma <initData>`. `miniapp/auth.py` checks Telegram's
 HMAC against `MINIAPP_INIT_SECRET`, requires `auth_date` under 24 h and admits only

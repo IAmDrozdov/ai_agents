@@ -36,4 +36,4 @@ bot chat's URL) live in `CLAUDE.local.md`, which is gitignored because this repo
 ## Cleanup
 - Test messages (yours and the bot's, under 48 h old): `send_media.py delete <message_id…>`; the
   ids are in the snapshot or in `tg_message_id` of the Item (older Items also `tg_ack_message_id`).
-- Test Items: Mini App → item → «В корзину», then Корзина → «Удалить навсегда».
+- Test Items: Mini App → item → «Удалить», then confirm (the «Готово» tab holds the done ones).

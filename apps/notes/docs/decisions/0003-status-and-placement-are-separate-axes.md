@@ -1,5 +1,7 @@
 # Status and Placement are separate axes
 
+_Superseded by ADR-0010 (2026-10-07): Placement is gone and Status is `todo` / `done`. The rest of this record is history._
+
 Status (`new` / `started` / `done`) is progress toward the thing the Item is for; Placement
 (`active` / `archived` / `trashed`) is visibility. Archiving is an explicit act by the Owner and
 nothing is archived automatically in v1 except through an explicit bulk action, so a reference

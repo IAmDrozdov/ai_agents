@@ -5,7 +5,7 @@ are saved at once, enriched (title, author, caption, thumbnail, a voice's transc
 in the admin Mini App (ADR-016). Merged in from the standalone `maxi-notes` repo (ADR-015).
 
 - Vocabulary: `CONTEXT.md` (separate from the repo glossary: **Source** means something else here)
-- Decisions: `docs/decisions/0001–0008` · Spec: `docs/spec.md` · Tickets: `docs/tickets/`
+- Decisions: `docs/decisions/0001–0010` · Spec: `docs/spec.md` · Tickets: `docs/tickets/`
 
 ## Layout
 
@@ -43,6 +43,8 @@ check it as in `docs/verifying.md` §2.
 Tickets 01–04 were done in maxi-notes: a Note on the web, deploy, Links with dedupe, and
 Enrichment without an LLM. 05 (OpenAI Classifier) was done here. 11 is the Mini App skeleton, 08
 the sorting pass and 09 Section management in it (ADR-016). 06 (Filing keyboard) and 07 (Browse)
-are replaced by the app. 12 (direct save + look at the content) was done after. 10 (housekeeping) is next. Their "(seam N)"
+are replaced by the app. 12 (direct save + look at the content) was done after. Then an Item kept one Status, `todo` /
+`done`, with no Archive, Trash or Reviewed (ADR-0010), which drops 10's Trash purge; the rest of
+10 (housekeeping) is next. Their "(seam N)"
 criteria predate the merge: check them by hand, with `notes-smoke` or with signed requests to the
 Mini App API, since this repo has no automated tests (ADR-001).

@@ -95,7 +95,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
 }
 .tab.on { background: var(--card); color: var(--text); }
 
-/* Chips and the Placement switch */
+/* Chips and the Status switch */
 .chips {
   display: flex;
   gap: 8px;
@@ -127,7 +127,6 @@ button { font: inherit; color: inherit; cursor: pointer; }
 /* Item cards */
 .cards { display: flex; flex-direction: column; gap: 10px; }
 .card { display: flex; gap: 12px; padding: 12px; background: var(--card); border-radius: var(--radius); }
-.card.done { opacity: 0.6; }
 .card-body { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 4px; align-items: flex-start; }
 .thumb { width: 72px; height: 72px; flex: none; object-fit: cover; border-radius: 8px; background: var(--panel); }
 .title {
@@ -143,7 +142,6 @@ a.title { color: var(--link); text-decoration: none; }
 .gist { overflow-wrap: anywhere; }
 .annotation { color: var(--hint); font-size: 13px; overflow-wrap: anywhere; }
 .meta { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 2px; }
-.status { color: var(--hint); font-size: 12px; }
 
 .badge {
   display: inline-flex;
@@ -159,9 +157,6 @@ a.title { color: var(--link); text-decoration: none; }
 .badge.run { color: var(--hint); }
 
 .card.clickable { cursor: pointer; }
-.status.unreviewed { color: var(--accent); }
-.filters { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 12px; }
-.bulk { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
 .btn:disabled { opacity: 0.45; cursor: default; }
 
 /* Item view */
@@ -180,8 +175,6 @@ a.title { color: var(--link); text-decoration: none; }
 }
 .detail .title { font-size: 18px; display: block; -webkit-line-clamp: unset; margin: 0; }
 .detail h3 { margin: 12px 0 0; font-size: 13px; font-weight: 600; color: var(--hint); }
-.detail .segmented { width: 100%; margin: 0; background: var(--panel); }
-.detail .seg.on { background: var(--card); }
 .chip-row { display: flex; flex-wrap: wrap; gap: 8px; }
 .field { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; width: 100%; }
 .textarea {

@@ -389,19 +389,10 @@ async def offer_handler(
 
 
 @router.callback_query(NotesCB.filter(F.action == "restore"))
-async def restore_handler(
-    callback: CallbackQuery, callback_data: NotesCB, notes: NotesRuntime | None
-) -> None:
+async def stale_restore_handler(callback: CallbackQuery) -> None:
+    """An old ↩️ button: it only removes itself (ADR-0010)."""
     message = _admin_message(callback)
-    if (
-        message is None
-        or notes is None
-        or await asyncio.to_thread(items.get_item, notes.db, callback_data.item_id) is None
-    ):
-        await callback.answer()
-        return
-    await asyncio.to_thread(items.set_placement, notes.db, callback_data.item_id, "active")
-    await callback.answer("Вернул")
-    # An old Acknowledgement message: its button goes; a repeat tap finds it gone already.
-    with contextlib.suppress(TelegramBadRequest):
-        await message.edit_reply_markup(reply_markup=None)
+    await callback.answer()
+    if message is not None:  # the button goes; a repeat tap finds it gone already
+        with contextlib.suppress(TelegramBadRequest):
+            await message.edit_reply_markup(reply_markup=None)

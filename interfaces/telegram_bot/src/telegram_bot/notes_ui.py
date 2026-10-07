@@ -28,7 +28,7 @@ SHOW_TEXT = "↩️ Вот оно"
 
 
 class NotesCB(CallbackData, prefix="n"):
-    """Notes actions on an Item: action is 'offer' (price card) or 'restore' (back to active)."""
+    """Notes actions on an Item: action is 'offer' (price card) or 'restore' (an old, dead button)."""
 
     action: str
     item_id: int

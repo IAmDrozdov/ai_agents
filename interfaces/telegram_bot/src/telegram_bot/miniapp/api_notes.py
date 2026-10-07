@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from notes.db import Database
 from notes.domain import items, sections
-from notes.domain.items import Item, ItemFilter, Placement, Status
+from notes.domain.items import Item, ItemFilter, Status
 
 from .auth import require_admin
 
@@ -18,14 +18,12 @@ router = APIRouter(prefix="/api/notes", dependencies=[Depends(require_admin)])
 
 
 class ItemPatch(BaseModel):
-    """One Owner edit; every field is optional and an empty patch only marks the Item Reviewed."""
+    """One Owner edit; every field is optional."""
 
     model_config = ConfigDict(extra="forbid")
     sections: list[str] | None = Field(default=None, max_length=50)
     status: Status | None = None
-    placement: Placement | None = None
     text: str | None = Field(default=None, max_length=4096)  # Telegram's own message limit
-    reviewed: bool | None = None
 
 
 class SectionIn(BaseModel):
@@ -51,16 +49,6 @@ class OrderBody(BaseModel):
     ids: list[int] = Field(max_length=200)
 
 
-class FilterBody(BaseModel):
-    """The list filter, for actions that cover every page of it."""
-
-    model_config = ConfigDict(extra="forbid")
-    sections: list[str] = Field(default_factory=list, max_length=50)
-    status: Status | None = None
-    placement: Placement = "active"
-    unreviewed: bool = False
-
-
 def get_db(request: Request) -> Database:
     return request.app.state.notes_db
 
@@ -76,10 +64,10 @@ def _found(item: Item | None) -> Item:
 
 @router.get("/sections")
 def get_sections(db: DbDep) -> dict[str, Any]:
-    counts = sections.active_counts(db)
+    counts = sections.todo_counts(db)
     return {
         "sections": [
-            asdict(section) | {"active_count": counts.get(section.id, 0)}
+            asdict(section) | {"todo_count": counts.get(section.id, 0)}
             for section in sections.list_sections(db)
         ]
     }
@@ -113,15 +101,11 @@ def remove_section(section_id: int, db: DbDep) -> None:
 def get_items(
     db: DbDep,
     section: Annotated[list[str] | None, Query(max_length=50)] = None,
-    status: Status | None = None,
-    placement: Placement = "active",
-    unreviewed: bool = False,
+    status: Status = "todo",
     offset: Annotated[int, Query(ge=0)] = 0,
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
 ) -> dict[str, Any]:
-    flt = ItemFilter(
-        sections=tuple(section or ()), status=status, placement=placement, unreviewed=unreviewed
-    )
+    flt = ItemFilter(sections=tuple(section or ()), status=status)
     page = items.query(db, flt, offset=offset, limit=limit)
     return {"items": [asdict(item) for item in page.items], "total": page.total}
 
@@ -165,43 +149,12 @@ def show_in_chat(item_id: int, db: DbDep) -> dict[str, Any]:
 @router.patch("/items/{item_id}")
 def patch_item(item_id: int, patch: ItemPatch, db: DbDep) -> dict[str, Any]:
     item = items.edit_item(
-        db,
-        item_id,
-        sections=patch.sections,
-        status=patch.status,
-        placement=patch.placement,
-        text=patch.text,
-        reviewed=True if patch.reviewed is None else patch.reviewed,
+        db, item_id, sections=patch.sections, status=patch.status, text=patch.text
     )
     return asdict(_found(item))
 
 
 @router.delete("/items/{item_id}", status_code=204)
 def delete_item(item_id: int, db: DbDep) -> None:
-    try:
-        deleted = items.delete_trashed(db, item_id)
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail="Only a trashed item can be deleted") from exc
-    if not deleted:
+    if not items.delete_item(db, item_id):
         raise HTTPException(status_code=404, detail="Item not found")
-
-
-@router.post("/bulk/archive-done")
-def bulk_archive_done(db: DbDep) -> dict[str, int]:
-    return {"count": items.archive_done(db)}
-
-
-@router.post("/bulk/mark-reviewed")
-def bulk_mark_reviewed(body: FilterBody, db: DbDep) -> dict[str, int]:
-    flt = ItemFilter(
-        sections=tuple(body.sections),
-        status=body.status,
-        placement=body.placement,
-        unreviewed=body.unreviewed,
-    )
-    return {"count": items.mark_reviewed(db, flt)}
-
-
-@router.post("/bulk/empty-trash")
-def bulk_empty_trash(db: DbDep) -> dict[str, int]:
-    return {"count": items.empty_trash(db)}

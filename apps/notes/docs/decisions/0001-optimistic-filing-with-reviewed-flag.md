@@ -1,5 +1,7 @@
 # Filing is optimistic, with a Reviewed flag — there is no inbox
 
+_Amended by ADR-0010 (2026-10-07): the Reviewed flag and the sorting pass are gone. Filing stays optimistic with no inbox; the Classifier files only an Item that is in Other alone._
+
 The Classifier files every Item into Sections at Capture and the Item lands there immediately;
 `reviewed` records whether the Owner has looked at that Filing since. We rejected an
 inbox-until-confirmed model because an unreviewed inbox is exactly the unsorted pile the product

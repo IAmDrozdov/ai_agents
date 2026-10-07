@@ -18,6 +18,9 @@ Status: ready-for-agent
 >   authentication on the web UI" out-of-scope line no longer apply: the app is public over HTTPS and
 >   every API call needs Telegram-signed data from the admin. Wherever this spec says "the web", read
 >   "the Mini App".
+> - **Status:** one Status, `todo` / `done` with `done_at`, and no Placement, Reviewed, Archive,
+>   Trash, bulk actions or sorting pass (notes ADR-0010). The Mini App lists one Status at a time
+>   and deletes an Item behind a confirm. Wherever this spec says otherwise, ADR-0010 wins.
 
 ## Problem Statement
 

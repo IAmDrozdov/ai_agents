@@ -1,7 +1,7 @@
 # Notes — glossary
 
 A single owner's "save for later" store: things captured from a phone through the ai_agents
-Telegram bot, filed into sections automatically, sorted and tidied in the admin Mini App.
+Telegram bot, filed into Sections automatically, looked through and corrected in the admin Mini App.
 Kept apart from the repo-level `CONTEXT.md` because some words mean something else there
 (**Source** most of all). Here, the **Owner** is the ai_agents admin.
 
@@ -84,28 +84,8 @@ The platform or site a Link came from (YouTube, Instagram, TikTok, a domain).
 _Avoid_: provider, origin, site
 
 **Status**:
-An Item's progress: new, started, done.
-_Avoid_: state, stage, progress, viewed
-
-**Placement**:
-Where an Item lives: active, archived, trashed. Independent of Status.
-_Avoid_: state, lifecycle, visibility, folder
-
-**Archive**:
-The Placement for Items kept out of sight; never purged.
-_Avoid_: done, hidden
-
-**Trash**:
-The Placement for Items awaiting deletion; purged after 30 days.
-_Avoid_: bin, deleted, removed
-
-**Reviewed**:
-Whether the Owner has looked at an Item's Filing since Capture.
-_Avoid_: confirmed, checked, triaged
-
-**Sorting pass**:
-The Owner's periodic session in the Mini App working through unreviewed Items.
-_Avoid_: triage, inbox zero, review queue
+Whether the Owner has taken an Item up yet: todo, or done once they have — a series they started watching is done. There is no in-progress value.
+_Avoid_: state, stage, progress, viewed, started, archived
 
 **Browse**:
 Reading Sections and Items from inside the bot.

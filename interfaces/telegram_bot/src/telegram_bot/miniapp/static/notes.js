@@ -1,4 +1,4 @@
-// Заметки: Section chips, filters, the item list, the item view and bulk actions.
+// Заметки: Section chips, the Status switch, the item list and the item view.
 // Nothing is rebuilt on a tap: controls are built once and only change class or text, cards are reused by id.
 
 import {
@@ -22,17 +22,10 @@ import {
 
 const PAGE = 50;
 const MAX_CHUNK = 100; // the most items the server returns in one request
-const PLACEMENTS = [
-  ["active", "Активные"],
-  ["archived", "Архив"],
-  ["trashed", "Корзина"],
-];
 const STATUSES = [
-  ["new", "Новое"],
-  ["started", "Начато"],
+  ["todo", "Сделать"],
   ["done", "Готово"],
 ];
-const STATUS_LABELS = { new: "новое", started: "начато", done: "готово" };
 const OTHER = "other";
 const STALE_AFTER_MS = 350;
 // The item fields the top of the item view shows; it is rebuilt only when one of them changes.
@@ -85,7 +78,7 @@ function enrichmentBadge(item) {
 
 // handlers: open(item) shows the item view, changed(item) receives an item the card re-enriched.
 function card(item, handlers) {
-  const node = el("article", "card clickable" + (item.status === "done" ? " done" : ""));
+  const node = el("article", "card clickable");
   node.onclick = () => handlers.open(item);
   if (isHttp(item.image_url)) {
     const img = el("img", "thumb");
@@ -117,8 +110,6 @@ function card(item, handlers) {
 
   const meta = el("div", "meta");
   for (const section of item.sections) meta.append(sectionChip(section));
-  meta.append(el("span", "status", STATUS_LABELS[item.status] || item.status));
-  if (!item.reviewed) meta.append(el("span", "status unreviewed", "● не просмотрено"));
   body.append(meta);
 
   if (item.enrichment_status === "pending") {
@@ -143,9 +134,7 @@ export async function mountNotes(root, launch = {}) {
   const state = {
     sections: [],
     selected: new Set(),
-    placement: "active",
-    status: "",
-    unreviewed: false,
+    status: "todo",
     items: [],
     total: 0,
     ticket: 0,
@@ -166,29 +155,16 @@ export async function mountNotes(root, launch = {}) {
 
   const chips = el("div", "chips");
   const switcher = el("div", "segmented");
-  const filters = el("div", "filters");
   const list = el("div", "cards");
   const more = el("button", "btn wide", "Показать ещё");
-  const bulk = el("div", "bulk");
-  listView.append(chips, switcher, filters, list, more, bulk);
+  listView.append(chips, switcher, list, more);
 
-  // --- filters and chips ---------------------------------------------------
+  // --- Status switch and chips ---------------------------------------------
 
   function filterQuery() {
-    const query = new URLSearchParams({ placement: state.placement });
-    if (state.status) query.set("status", state.status);
-    if (state.unreviewed) query.set("unreviewed", "true");
+    const query = new URLSearchParams({ status: state.status });
     for (const slug of state.selected) query.append("section", slug);
     return query;
-  }
-
-  function filterBody() {
-    return {
-      sections: [...state.selected],
-      status: state.status || null,
-      placement: state.placement,
-      unreviewed: state.unreviewed,
-    };
   }
 
   const allChip = el("button", "chip filter", "Все");
@@ -224,49 +200,27 @@ export async function mountNotes(root, launch = {}) {
     allChip.classList.toggle("on", state.selected.size === 0);
     for (const section of state.sections) {
       const button = chipButtons.get(section.slug);
-      const count = state.placement === "active" ? ` · ${section.active_count}` : "";
+      const count = state.status === "todo" ? ` · ${section.todo_count}` : "";
       button.classList.toggle("on", state.selected.has(section.slug));
       setText(button, `${section.emoji} ${section.name}${count}`);
     }
   }
 
-  const placementButtons = new Map();
-  for (const [value, label] of PLACEMENTS) {
+  const statusTabs = new Map();
+  for (const [value, label] of STATUSES) {
     const button = el("button", "seg", label);
     button.onclick = () => {
-      if (state.placement === value) return;
-      state.placement = value;
+      if (state.status === value) return;
+      state.status = value;
       syncControls();
       load(true);
     };
-    placementButtons.set(value, button);
+    statusTabs.set(value, button);
     switcher.append(button);
   }
 
-  const statusSelect = el("select", "select");
-  statusSelect.name = "status";
-  statusSelect.setAttribute("aria-label", "Статус");
-  for (const [value, label] of [["", "Любой статус"], ...STATUSES]) {
-    const option = el("option", null, label);
-    option.value = value;
-    statusSelect.append(option);
-  }
-  statusSelect.onchange = () => {
-    state.status = statusSelect.value;
-    load(true);
-  };
-  const unreviewedToggle = el("button", "chip filter", "● Не просмотрено");
-  unreviewedToggle.onclick = () => {
-    state.unreviewed = !state.unreviewed;
-    syncControls();
-    load(true);
-  };
-  filters.append(statusSelect, unreviewedToggle);
-
   function syncControls() {
-    for (const [value, button] of placementButtons) button.classList.toggle("on", state.placement === value);
-    unreviewedToggle.classList.toggle("on", state.unreviewed);
-    statusSelect.value = state.status;
+    for (const [value, button] of statusTabs) button.classList.toggle("on", state.status === value);
     syncChips();
   }
 
@@ -287,26 +241,8 @@ export async function mountNotes(root, launch = {}) {
   function emptyText() {
     if (state.loading) return "Загрузка…";
     if (state.failed) return "Не удалось загрузить список.";
-    if (state.selected.size || state.status || state.unreviewed) return "Под фильтр ничего не попало.";
-    return state.placement === "active" ? "Пока пусто. Кинь боту ссылку или заметку." : "Тут пусто.";
-  }
-
-  const bulkButton = (label, cls, handler) => {
-    const button = el("button", "btn small " + cls, label);
-    button.onclick = handler;
-    bulk.append(button);
-    return button;
-  };
-  const archiveButton = bulkButton("Архивировать готовые", "ghost", () => archiveDone());
-  const reviewedButton = bulkButton("", "ghost", () => markReviewed());
-  const trashButton = bulkButton("Очистить корзину", "danger", () => emptyTrash());
-
-  function syncBulk() {
-    archiveButton.hidden = state.placement !== "active";
-    reviewedButton.hidden = state.placement === "trashed" || !state.total;
-    trashButton.hidden = state.placement !== "trashed" || !state.total;
-    setText(reviewedButton, `Отметить просмотренными (${state.total})`);
-    bulk.hidden = archiveButton.hidden && reviewedButton.hidden && trashButton.hidden;
+    if (state.selected.size) return "Под фильтр ничего не попало.";
+    return state.status === "todo" ? "Пока пусто. Кинь боту ссылку или заметку." : "Тут пусто.";
   }
 
   function renderList() {
@@ -321,7 +257,6 @@ export async function mountNotes(root, launch = {}) {
     more.hidden = !state.failed && state.items.length >= state.total;
     more.disabled = state.loading;
     setText(more, state.failed ? "Повторить" : "Показать ещё");
-    syncBulk();
   }
 
   // `want` items from `offset`, in requests the server accepts, all under the filter as it is now.
@@ -388,21 +323,18 @@ export async function mountNotes(root, launch = {}) {
 
   // The server's filter, mirrored: an item that no longer fits is gone before the list is shown again.
   function matchesFilter(item) {
-    if (item.placement !== state.placement) return false;
-    if (state.status && item.status !== state.status) return false;
-    if (state.unreviewed && item.reviewed) return false;
+    if (item.status !== state.status) return false;
     return !state.selected.size || item.sections.some((section) => state.selected.has(section.slug));
   }
 
-  // Done items sort last, so one that changes group leaves the loaded page and the next refresh puts it back.
+  // An item keeps its place while it fits the filter (the order is by creation) and leaves the list once not.
   function replaceItem(updated) {
-    const old = state.items.find((item) => item.id === updated.id);
-    if (!old) return;
-    if (matchesFilter(updated) && (updated.status === "done") === (old.status === "done")) {
+    if (!state.items.some((item) => item.id === updated.id)) return;
+    if (matchesFilter(updated)) {
       state.items = state.items.map((item) => (item.id === updated.id ? updated : item));
     } else {
       state.items = state.items.filter((item) => item.id !== updated.id);
-      if (!matchesFilter(updated)) state.total = Math.max(0, state.total - 1);
+      state.total = Math.max(0, state.total - 1);
     }
     renderList();
   }
@@ -412,39 +344,6 @@ export async function mountNotes(root, launch = {}) {
     state.total = Math.max(0, state.total - 1);
     renderList();
   }
-
-  // --- bulk actions --------------------------------------------------------
-
-  async function bulkAction(question, path, body, done) {
-    if (!(await confirmAction(question))) return;
-    const result = await attempt(() => api(path, { method: "POST", body }));
-    if (!result) return;
-    toast(done(result.count));
-    haptic("success");
-    await refresh();
-  }
-
-  const archiveDone = () =>
-    bulkAction(
-      "Отправить в архив все записи со статусом «готово»?",
-      "/notes/bulk/archive-done",
-      undefined,
-      (n) => `В архиве: ${n}`,
-    );
-  const markReviewed = () =>
-    bulkAction(
-      `Отметить просмотренными записи в этом списке (${state.total})?`,
-      "/notes/bulk/mark-reviewed",
-      filterBody(),
-      (n) => `Отмечено: ${n}`,
-    );
-  const emptyTrash = () =>
-    bulkAction(
-      "Удалить всё из корзины навсегда?",
-      "/notes/bulk/empty-trash",
-      undefined,
-      (n) => `Удалено: ${n}`,
-    );
 
   // --- item view -----------------------------------------------------------
 
@@ -567,19 +466,6 @@ export async function mountNotes(root, launch = {}) {
       sectionRow.append(chip);
     }
 
-    const statusRow = el("div", "segmented");
-    const statusButtons = new Map();
-    for (const [value, label] of STATUSES) {
-      const button = el("button", "seg", label);
-      button.onclick = () => {
-        if (state.detail.status === value) return;
-        haptic("select");
-        patch({ status: value }, { status: value });
-      };
-      statusButtons.set(value, button);
-      statusRow.append(button);
-    }
-
     const noteTitle = el("h3");
     const field = el("div", "field");
     const area = el("textarea", "textarea");
@@ -596,18 +482,9 @@ export async function mountNotes(root, launch = {}) {
     field.append(area, save);
     const actions = el("div", "actions");
 
-    box.append(
-      head,
-      el("h3", null, "Секции"),
-      sectionRow,
-      el("h3", null, "Статус"),
-      statusRow,
-      noteTitle,
-      field,
-      actions,
-    );
+    box.append(head, el("h3", null, "Секции"), sectionRow, noteTitle, field, actions);
     detailView.replaceChildren(back, box);
-    Object.assign(detailParts, { box, head, sectionButtons, statusButtons, noteTitle, area, save, actions });
+    Object.assign(detailParts, { box, head, sectionButtons, noteTitle, area, save, actions });
   }
 
   async function toggleSection(slug) {
@@ -626,16 +503,15 @@ export async function mountNotes(root, launch = {}) {
     if (state.busy) return;
     const version = state.version;
     const id = state.detail.id;
-    const reviewed = state.detail.reviewed;
+    const slugs = state.detail.sections.map((section) => section.slug);
+    const refiles = !slugs.length || (slugs.length === 1 && slugs[0] === OTHER); // the Classifier's rule (ADR-0010)
     state.rev += 1;
     const updated = await act(() => api(`/notes/items/${id}/reenrich`, { method: "POST" }));
     if (!updated) return;
     if (version === state.version) {
       state.detail = updated;
       syncDetail(updated);
-      toast(
-        reviewed ? "Поставил в очередь. Секции не трогаю: запись отмечена просмотренной" : "Поставил в очередь",
-      );
+      toast(refiles ? "Поставил в очередь" : "Поставил в очередь. Секции оставлю как есть");
     }
     settle();
   }
@@ -709,37 +585,27 @@ export async function mountNotes(root, launch = {}) {
       button.onclick = handler;
       nodes.push(button);
     };
-    const move = (placement) => () => patch({ placement }, { placement });
-    if (item.placement === "active") {
-      add("В архив", "ghost", move("archived"));
-      add("В корзину", "danger", move("trashed"));
-    } else if (item.placement === "archived") {
-      add("Вернуть", "ghost", move("active"));
-      add("В корзину", "danger", move("trashed"));
-    } else {
-      add("Вернуть", "ghost", move("active"));
-      add("Удалить навсегда", "danger", deleteForever);
-    }
-    const flip = () => {
-      const reviewed = !state.detail.reviewed;
-      return patch({ reviewed }, { reviewed });
+    const mark = (status) => () => {
+      haptic("select");
+      patch({ status }, { status });
     };
-    add(item.reviewed ? "Снять отметку «просмотрено»" : "Отметить просмотренным", "ghost", flip);
+    if (item.status === "todo") add("✓ Готово", "", mark("done"));
+    else add("↩ Вернуть", "ghost", mark("todo"));
+    add("Удалить", "danger", deleteForever);
     return nodes;
   }
 
   // Brings the open item view in line with `item`: only what differs is touched.
   function syncDetail(item) {
-    const { head, sectionButtons, statusButtons, noteTitle, area, save, actions } = detailParts;
+    const { head, sectionButtons, noteTitle, area, save, actions } = detailParts;
     slot(head, JSON.stringify(HEAD_FIELDS.map((field) => item[field])), () => headNodes(item));
     const current = new Set(item.sections.map((section) => section.slug));
     for (const [slug, button] of sectionButtons) button.classList.toggle("on", current.has(slug));
-    for (const [value, button] of statusButtons) button.classList.toggle("on", item.status === value);
     setText(noteTitle, item.kind === "note" ? "Текст заметки" : "Моя пометка");
     const saved = item.text || "";
     if (state.draft == null && area.value !== saved) area.value = saved;
     save.disabled = area.value === saved;
-    slot(actions, `${item.placement}|${item.reviewed}`, () => actionNodes(item));
+    slot(actions, item.status, () => actionNodes(item));
   }
 
   // --- start ---------------------------------------------------------------
