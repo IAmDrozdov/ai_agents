@@ -45,7 +45,7 @@ check it as in `docs/verifying.md` §2.
 
 ## Dashboard
 
-The Mini App opens on the Dashboard tab (`notes.domain.dashboard`): the todo count and
+The Mini App opens on the notes tab's Dashboard view (`notes.domain.dashboard`): the todo count and
 Overdue Items (todo, Due passed) and Items Captured and done per local day over 26 Monday-first weeks. `done_at` is stamped when an
 Item turns `done`; on start, a done Item without one gets `done_at = updated_at` (items done
 before the column existed, so their days are approximate).

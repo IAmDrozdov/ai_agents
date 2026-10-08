@@ -55,6 +55,31 @@ Signed-curl List checks (one `notes.domain.lists` List per request; seed with `m
 - `…/items?q=🧪` → both Statuses, at most 100;
 - `…/items?ids=1,2` → exactly those Items as they are now (the Recheck).
 
+Signed-curl diary checks (`/api/diary/*`, ADR-020; a fresh server, entries made by the checks):
+- no header → 401, another user → 403;
+- `POST /entries {day,text}` answers the Day with the text trimmed; `PATCH` and `DELETE` answer the Day;
+  whitespace-only, 121 characters, `2026-9-30` or `2026-02-30` → 422; 120 characters → 201;
+- `PUT /marks` `fire` → `dead` → `null` clears; an unknown Mark → 422; a Mark-only Day shows in the Week;
+- `POST /entries/{id}/raise` ×3 → week, month, year; a fourth → 422; `lower` ×3 back to day, a fourth → 422;
+  an Entry at year Level still sits in its Week's `summary`;
+- the Week of 30.09.2026 starts Monday 28.09; an Entry of 30.09 at week Level is a candidate in
+  `/month?year=2026&month=9` and nowhere in October; raised, it moves into September's `summary`;
+  edited, its new text shows there; deleted, it leaves every Summary;
+- `POST /entries?tz=<zone>` with no `day` lands on today in that zone, and `/week?tz=` opens that Week;
+- `/dashboard?tz=`: today empty and the two Days before written, then a Mark-only Day → `streak` 2;
+  today written → 3; on an empty Year `best_month` and `top_entry` are null; best Month ties go to
+  more Entries, then the earlier Month; `top_entry` is null when nothing repeats, a tie goes to the
+  most recent;
+- `/suggestions?prefix=Тр` → matching texts in any case, most frequent first; no prefix → the top five.
+
+On the screen (the 🧪 seed): the top row is «Заметки», «Дневник», ⚙️ and a launch shows the notes
+Dashboard; a Section bar and «просрочено» switch the notes toggle to the Items view; `/?item=<id>`
+opens that Item; «Дневник» → its Dashboard → a Day on the map opens its Week in «Записи»; «Добавить
+запись» opens today's editor with five suggestion chips; tapping 🔥 twice sets and clears the Mark;
+«+» moves an Entry into «Итоги недели»; the Month chip opens the Month, whose «+» moves a candidate
+into its Summary; ⚙️ and «← Назад» return to the tab and view left. With `/api/diary/*` held back,
+a warm reload still paints the diary Dashboard and the Week from the snapshot.
+
 The build hash is computed at startup, so restart the server after editing a static file
 (ADR-019). To see the request waterfall the way the phone does, turn on the MCP's "Fast 3G" (about
 560 ms a request, near Funnel's cost). Read `performance.getEntriesByType('resource')`: a warm reload

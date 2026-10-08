@@ -13,7 +13,7 @@ Three workflows, one job contract, two interfaces:
 
 - **Telegram bot** (`interfaces/telegram_bot`): send a file or link, get a card with
   every applicable workflow priced and ETA'd, tap one to run. Languages, models and
-  voice are per user. Invite-only. The admin also gets a Mini App for notes and usage.
+  voice are per user. Invite-only. The admin also gets a Mini App for notes, a diary and usage.
 - **Smoke runner** (`interfaces/smoke`): the same contract from the terminal —
   preview, price, confirm, run, write the result.
 
@@ -57,7 +57,7 @@ uv run smoke yt_dub https://www.youtube.com/watch?v=...
 Commands: `/settings` (languages, models, voice — remembered per user), `/status`,
 `/cancel`, `/help`. Details: `interfaces/telegram_bot/README.md`.
 
-The admin's Mini App (notes and usage) needs a public HTTPS URL: set up Tailscale Funnel as in
+The admin's Mini App (notes, diary and usage) needs a public HTTPS URL: set up Tailscale Funnel as in
 `infrastructure/README.md`, then put the address in `BOT_MINIAPP_URL`.
 
 ## Configuration

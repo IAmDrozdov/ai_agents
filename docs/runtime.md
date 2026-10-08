@@ -10,7 +10,7 @@ the notes path or the deploy. Shorthand: `telegram_bot/x.py` and `handlers/x.py`
 | Service | Entry point | Does | Reads / writes |
 |---|---|---|---|
 | `bot` | `telegram-bot` (`telegram_bot/__main__.py`) | Telegram long polling. Answers users, prices cards, runs one job at a time (`worker.worker_loop`), and runs notes enrichment plus the notes sweeper, show loop, reminder loop and, once per start, the Thumbnail backfill | `telegram_bot.sqlite3` rw, `notes.sqlite3` rw, OpenAI, YouTube, the web |
-| `miniapp` | `telegram-miniapp` (`telegram_bot/miniapp`) | The admin Mini App: a public static shell plus a signed JSON API for notes and usage, `127.0.0.1:8083` (ADR-016) | `telegram_bot.sqlite3` read, `notes.sqlite3` rw |
+| `miniapp` | `telegram-miniapp` (`telegram_bot/miniapp`) | The admin Mini App: a public static shell plus a signed JSON API for notes, the diary and usage, `127.0.0.1:8083` (ADR-016, ADR-020) | `telegram_bot.sqlite3` read, `notes.sqlite3` rw, `diary.sqlite3` rw (the only process that opens it) |
 | `funnel` (profile) | `tailscale/tailscale` | Publishes `miniapp` over HTTPS through Tailscale Funnel, outbound only (ADR-016) | `tsstate` volume |
 | `warp` (profile) | wireproxy | SOCKS5 egress for yt-dlp only (ADR-014) | — |
 | — | `smoke`, `notes-smoke` | Terminal-only reference runs (ADR-001) | local files |
@@ -148,8 +148,10 @@ Language: the bot UI is English; notes texts and the Mini App are Russian.
 While `BOT_MINIAPP_URL` is set, the bot gives the admin's chat a `📒` menu button
 (`__main__.set_admin_menu_button`, at startup, for that chat only). It opens
 the `miniapp` service through the funnel sidecar: a static shell (`miniapp/static`, vanilla JS)
-that calls `/api/usage` and `/api/notes/*`. It has two tabs and a ⚙️ button; each tab is mounted
-once per launch and keeps its state in memory until the app closes.
+that calls `/api/usage`, `/api/notes/*` and `/api/diary/*`. Its top row holds one tab per app, «Заметки» and
+«Дневник», and a ⚙️ button (ADR-020). Each tab (`toggled.js`) has a `[Дашборд | …]` toggle over two views, opens
+on its Dashboard, and is mounted once per launch, keeping its toggle position and views in memory until the app
+closes. A launch opens «Заметки» on its Dashboard; `✏️ Открыть` (`?item=<id>`) opens that Item in the notes Items view.
 
 Funnel costs 250–450 ms a request, so the app is built to need few requests (ADR-019):
 - **Shell and assets.** The shell `/` is revalidated on every launch (ETag = a hash of the shell). Assets live
@@ -157,15 +159,17 @@ Funnel costs 250–450 ms a request, so the app is built to need few requests (A
   (`modulepreload`).
 - **Compression.** Responses over 500 B are gzipped.
 - **Snapshot.** The last answers are kept on the phone (`DeviceStorage`, else `localStorage`: Telegram Web answers DeviceStorage `UNSUPPORTED`;
-  `core.js` snapshots). The Dashboard, the Sections and the open lists paint from them at once,
-  then refresh behind them.
+  `core.js` snapshots). The Dashboards, the Sections, the open lists, the current diary Week and the top
+  diary suggestions paint from them at once, then refresh behind them.
+
+«Заметки» (`[Дашборд | Заметки]`):
 
 - **Дашборд** (first) is infographics only (`GET /api/notes/dashboard?tz=<IANA zone>`): the todo
   count with «просрочено: N» beside it when anything is Overdue, two 26-week heatmaps of Items
   Captured and done per day (days in the Owner's time zone, from `created_at` and `done_at`), and a
   bar per Section with todo Items (`todo_count` from `/api/notes/sections`). A bar is tappable: it
-  opens Заметки with that Section expanded on «Сделать»; so is «просрочено: N», which opens the
-  «Просрочено» row. The request's `tz` is also stored as the Owner's zone.
+  switches the toggle to the Items view with that Section expanded on «Сделать»; so is «просрочено: N»,
+  which opens the «Просрочено» row. The request's `tz` is also stored as the Owner's zone.
 - **Заметки** reads Items through `/api/notes/items`, one `notes.domain.lists` List per request:
   `InSection` (`section`, `status`), `Overdue` (`overdue=true`), `Search` (`q`) and `Recheck` (`ids`).
   It starts with a «⏰ Просрочено» row when something is Overdue
@@ -179,6 +183,24 @@ Funnel costs 250–450 ms a request, so the app is built to need few requests (A
   folded by the `fold()` SQL function the notes `Database` registers on each connection (casefold,
   «ё» as «е»). «Изменить» shows headers only: drag ⋮⋮ to reorder (`PUT /api/notes/sections/order`),
   ✏️ for the Section form, «+ Новая секция» at the end.
+
+«Дневник» (`[Дашборд | Записи]`, `apps/diary`, vocabulary `apps/diary/CONTEXT.md`). Both views carry
+«+ Добавить запись», which opens today's Day editor. Days are the Owner's local dates: the page sends `tz`
+and the router (`miniapp/api_diary.py`) turns it into «today» before calling the domain.
+
+- **Дашборд** (`diaryboard.js`, `GET /api/diary/dashboard?year=&tz=`): two half-year Day maps coloured
+  by Mark (drawn by `dashboard.js`'s `dayMap`, like the notes heatmaps), the counts (Entries, Days with an
+  Entry, Streak, 🔥 Days), the most repeated Entry and the best Month; ‹ › change the Year. A Day on the
+  map switches the toggle to «Записи» on its Week.
+- **Записи** (`diary.js`): the Week (`GET /api/diary/week?day=&tz=`, read with the top five
+  suggestions in one round), ‹ › between Weeks, a chip per Month the Week touches, the Week's Summary
+  under the Days. «+» raises an Entry, «−» lowers it. Over the Week, with Telegram's back button
+  returning: the Day editor (Mark 💀 😐 🔥, tapping the set one clears it; add with prefix
+  suggestions from `/api/diary/suggestions?prefix=`; edit, delete), the Month and the Year (Summary and
+  candidates, `GET /api/diary/month`, `/year`). Writes (`POST/PATCH/DELETE /api/diary/entries`,
+  `…/{id}/raise|lower`, `PUT /api/diary/marks`) show at once, go one at a time, and answer the Day or
+  the Entry; a refused write (422) or a failure reloads what is true.
+
 - **⚙️** opens Расходы (`/api/usage`) over the tabs; Telegram's back button returns.
 
 The item view (`detail.js`) edits an item (Sections, Annotation, «✓ Готово» / «↩ Вернуть», which
@@ -223,7 +245,8 @@ up anything left `pending` from sqlite.
     (`ADMIN_TELEGRAM_ID`, `LOG_LEVEL` and the derived `MINIAPP_INIT_SECRET`) and `funnel.env`
     (`TS_AUTHKEY`). A variable the Mini App needs goes into the first;
   - the README tables.
-  Compose `environment:` overrides `bot.env`.
+  Compose `environment:` overrides `bot.env`. `DIARY_DB_PATH` is set only there, for `miniapp`: the bot
+  never opens the diary, so it is not in `bot.env`.
 - **A service or workspace package:**
   - the manifests stage in `infrastructure/docker/Dockerfile` (one `COPY <pkg>/pyproject.toml`
     per member);

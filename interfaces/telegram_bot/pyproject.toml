@@ -16,6 +16,7 @@ dependencies = [
     "trafilatura>=1.12",
     "shared",
     "notes",
+    "diary",
     "pdf_tts",
     "doc_translator",
     "yt_dub",
@@ -28,6 +29,7 @@ telegram-miniapp = "telegram_bot.miniapp.__main__:main"
 [tool.uv.sources]
 shared = { workspace = true }
 notes = { workspace = true }
+diary = { workspace = true }
 pdf_tts = { workspace = true }
 doc_translator = { workspace = true }
 yt_dub = { workspace = true }

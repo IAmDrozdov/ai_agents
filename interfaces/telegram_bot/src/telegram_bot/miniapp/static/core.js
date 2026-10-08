@@ -40,6 +40,11 @@ export function slot(node, key, build) {
   node.replaceChildren(...build());
 }
 
+// Makes the next slot() call on node rebuild whatever its key.
+export function resetSlot(node) {
+  delete node.dataset.key;
+}
+
 export class AuthError extends Error {}
 
 // --- snapshots: the last answers, kept across launches so a view paints before the network answers (ADR-019) ---

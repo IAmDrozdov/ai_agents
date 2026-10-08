@@ -16,7 +16,7 @@ single DigitalOcean droplet.
     through an outbound tunnel
   - `warp` (optional) — the YouTube egress sidecar (ADR-014)
 - **sqlite** lives on the named volume `appdata` (`/data/telegram_bot.sqlite3`,
-  `/data/notes.sqlite3`);
+  `/data/notes.sqlite3`, `/data/diary.sqlite3`);
   it survives rebuilds/redeploys and dies only with `docker volume rm` or
   `terraform destroy`.
 - **Firewall**: no inbound rule at all; all egress open. SSH is opened for your current address
@@ -187,7 +187,7 @@ uv run python infrastructure/backup.py uninstall
 
 - **Where:** `~/Library/Mobile Documents/com~apple~CloudDocs/Backups/maxi-bot/`, or
   `MAXI_BOT_BACKUP_DIR`. It holds one `YYYY-MM-DD/` folder per day (`notes.sqlite3`,
-  `telegram_bot.sqlite3`, `manifest.json`) and one shared `files/` folder with
+  `telegram_bot.sqlite3`, `diary.sqlite3` once the droplet has one (ADR-020), `manifest.json`) and one shared `files/` folder with
   `<item id>-<file_id hash>-<name>.<ext>`. The hash is there because a restore hands out old Item ids
   again. The newest 30 days are kept.
 - **Manifest:** checksums, integrity result and row counts per database. It also lists which Items
@@ -216,7 +216,7 @@ G=./infrastructure/ssh-gate.sh
 C="docker compose -f /opt/maxi_bot/src/infrastructure/docker/docker-compose.yml"
 D="$HOME/Library/Mobile Documents/com~apple~CloudDocs/Backups/maxi-bot/<YYYY-MM-DD>"
 $G ssh "$C stop bot miniapp"                                           # 1. stop both writers
-for f in notes.sqlite3 telegram_bot.sqlite3; do                        # 2. put the copies in place
+for f in notes.sqlite3 telegram_bot.sqlite3 diary.sqlite3; do          # 2. put the copies in place
   $G ssh "cd \$(docker volume inspect -f '{{.Mountpoint}}' docker_appdata) && cat > $f.restore \
     && mv $f $f.before-restore && { [ ! -e $f-wal ] || mv $f-wal $f.before-restore-wal; } \
     && rm -f $f-shm && mv $f.restore $f && chown 10001:10001 $f" < "$D/$f"

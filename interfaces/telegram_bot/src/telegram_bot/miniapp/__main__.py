@@ -7,6 +7,7 @@ import sys
 
 import uvicorn
 
+from diary.db import Database as DiaryDatabase
 from notes.db import Database
 from shared.config import settings
 from shared.obs import get_logger
@@ -29,8 +30,13 @@ def main() -> None:
     init_tracing(settings=settings, service_name="maxi-bot-miniapp")
     notes_db = Database(settings.notes_db_path)
     notes_db.init()
-    log.info("mini app on %s:%s (notes=%s)", args.host, args.port, settings.notes_db_path)
-    uvicorn.run(create_app(notes_db), host=args.host, port=args.port, server_header=False)
+    diary_db = DiaryDatabase(settings.diary_db_path)
+    diary_db.init()
+    log.info(
+        "mini app on %s:%s (notes=%s, diary=%s)",
+        args.host, args.port, settings.notes_db_path, settings.diary_db_path,
+    )  # fmt: skip
+    uvicorn.run(create_app(notes_db, diary_db), host=args.host, port=args.port, server_header=False)
 
 
 if __name__ == "__main__":

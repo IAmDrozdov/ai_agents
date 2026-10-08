@@ -3,7 +3,7 @@
 Map. Follow links. No rule duplication here. Humans start at `README.md`.
 
 ## What this is
-Monorepo of local AI workflows exposed through one job contract (`shared.job`, ADR-012) by a private Telegram bot and a terminal smoke runner, plus one stateful app — `apps/notes`, the admin's save-for-later store (ADR-015). New interfaces are thin adapters holding a registry of workflow descriptors. No automated tests (ADR-001).
+Monorepo of local AI workflows exposed through one job contract (`shared.job`, ADR-012) by a private Telegram bot and a terminal smoke runner, plus two stateful apps — `apps/notes`, the admin's save-for-later store (ADR-015), and `apps/diary`, the admin's diary, reached only from the Mini App (ADR-020). New interfaces are thin adapters holding a registry of workflow descriptors. No automated tests (ADR-001).
 
 ## Docs, read by task
 - Any bot, notes or deploy work: `docs/runtime.md` first (what runs, how the parts talk, in-memory state, touch points).
@@ -17,7 +17,8 @@ Monorepo of local AI workflows exposed through one job contract (`shared.job`, A
 - New node -> `.skills/create-node.md`
 - Run a workflow from the terminal -> `uv run smoke <id> <path-or-url>`
 - Notes (app) -> `apps/notes/README.md`; smoke: `uv run notes-smoke <url-or-text>`
-- Admin Mini App (notes + usage) -> `docs/decisions/016-telegram-mini-app.md`, `docs/decisions/019-mini-app-over-a-slow-link.md` (caching, snapshot, polling), `docs/runtime.md`; checks: `docs/verifying.md` §2 and §5
+- Diary (app) -> `apps/diary/README.md`, `docs/decisions/020-diary-app-and-per-app-dashboards.md`; checks: `docs/verifying.md` §2
+- Admin Mini App (notes, diary, usage) -> `docs/decisions/016-telegram-mini-app.md`, `docs/decisions/019-mini-app-over-a-slow-link.md` (caching, snapshot, polling), `docs/runtime.md`; checks: `docs/verifying.md` §2 and §5
 - Domain terms -> `CONTEXT.md`
 - New ADR -> `docs/decisions/NNN-title.md`
 - Deploy bot to droplet -> `.claude/skills/deploy-bot/SKILL.md` (slash: `/deploy-bot`)
@@ -52,7 +53,7 @@ Manual run: `uv run pre-commit run --all-files`.
 - Disabling pre-commit hooks
 
 ## Stack (fixed)
-Py 3.12+, uv workspaces, Ruff, ty, Pydantic, LangChain (primary), LangGraph (justified), aiogram Telegram bot + FastAPI admin Mini App (notes and usage), sqlite, pre-commit.
+Py 3.12+, uv workspaces, Ruff, ty, Pydantic, LangChain (primary), LangGraph (justified), aiogram Telegram bot + FastAPI admin Mini App (notes, diary and usage), sqlite, pre-commit.
 
 ## Agent skills
 

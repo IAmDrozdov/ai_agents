@@ -31,6 +31,9 @@ class Settings(BaseSettings):
     notes_classifier_provider: str = "fake"  # fake | openai
     notes_classifier_model: str = ""  # empty = shared.pricing.DEFAULT_TRANSLATE_MODEL
 
+    # Diary (apps/diary, ADR-020): only the Mini App reads and writes it.
+    diary_db_path: str = "data/diary.sqlite3"
+
     # Admin Mini App (ADR-016): its public HTTPS URL; empty = no menu button, no ✏️ button.
     bot_miniapp_url: str = ""
     # hex HMAC_SHA256("WebAppData", bot token) for the miniapp container; empty = derive from the token.

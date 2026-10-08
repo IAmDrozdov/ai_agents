@@ -19,6 +19,7 @@ COPY workflows/doc_translator/pyproject.toml workflows/doc_translator/
 COPY workflows/pdf_tts/pyproject.toml workflows/pdf_tts/
 COPY workflows/yt_dub/pyproject.toml workflows/yt_dub/
 COPY apps/notes/pyproject.toml apps/notes/
+COPY apps/diary/pyproject.toml apps/diary/
 COPY interfaces/smoke/pyproject.toml interfaces/smoke/
 COPY interfaces/telegram_bot/pyproject.toml interfaces/telegram_bot/
 # uv and its download cache are mounted for the build only; neither lands in the image.

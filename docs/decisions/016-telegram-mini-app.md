@@ -1,6 +1,6 @@
 # ADR-016: A Telegram Mini App replaces the SSH-tunnel web UIs
 
-Status: Accepted (2026-09-29). Supersedes notes ADR-0004; amends ADR-008 (the dashboard) and ADR-015 (decision 3).
+Status: Accepted (2026-09-29). Supersedes notes ADR-0004; amends ADR-008 (the dashboard) and ADR-015 (decision 3). Amended by ADR-020 (tabs are apps).
 
 ## Context
 

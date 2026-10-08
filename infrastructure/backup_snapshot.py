@@ -1,4 +1,4 @@
-"""Consistent copies of both databases as a tar on stdout; `backup.py` feeds it to `python -` (ADR-018)."""
+"""Consistent copies of the databases as a tar on stdout; `backup.py` feeds it to `python -` (ADR-018)."""
 
 import hashlib
 import io
@@ -12,6 +12,8 @@ DATABASES = (
     ("notes.sqlite3", "NOTES_DB_PATH", "data/notes.sqlite3"),
     ("telegram_bot.sqlite3", "TELEGRAM_DB_PATH", "data/telegram_bot.sqlite3"),
 )
+# Optional: skipped while missing. The bot container has no DIARY_DB_PATH; the diary sits beside notes.
+OPTIONAL = ("diary.sqlite3",)
 MAX_BYTES = 100 * 2**20  # the copy is held in memory, inside the bot container's 700 MB cap
 
 
@@ -47,8 +49,10 @@ def add(tar: tarfile.TarFile, name: str, data: bytes) -> None:
 def main() -> None:
     meta: dict[str, dict[str, object]] = {}
     with tarfile.open(fileobj=sys.stdout.buffer, mode="w|") as tar:
-        for name, env, default in DATABASES:
-            path = os.environ.get(env, default)
+        notes_dir = os.path.dirname(os.environ.get("NOTES_DB_PATH", "data/notes.sqlite3"))
+        optional = [(name, os.path.join(notes_dir, name)) for name in OPTIONAL]
+        wanted = [(name, os.environ.get(env, default)) for name, env, default in DATABASES]
+        for name, path in wanted + [(n, p) for n, p in optional if os.path.exists(p)]:
             try:
                 data, counts = snapshot(path)
             except OSError as e:

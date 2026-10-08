@@ -1,15 +1,42 @@
-// Entry: checks the Telegram launch, then draws the tabs and ⚙️. A tab is mounted once per launch and keeps its
-// state while another is shown; «Расходы» opens over the tabs and Telegram's back button returns.
+// Entry: checks the Telegram launch, then draws the app tabs and ⚙️ (ADR-020). A tab is mounted once per launch and
+// keeps its state while another is shown; «Расходы» opens over the tabs and Telegram's back button returns.
 
 import { OVERDUE } from "./cards.js";
 import { el, handleError, isHalted, loadSnapshots, prepareShell, setBack, showMessage, tg } from "./core.js";
 import { mountDashboard, reportZone } from "./dashboard.js";
+import { mountDiaryBoard } from "./diaryboard.js";
+import { mountWeek } from "./diary.js";
 import { mountNotes } from "./notes.js";
+import { mountToggled } from "./toggled.js";
 import { mountUsage } from "./usage.js";
 
+// One tab per app, each opening on its Dashboard; `views` are the two sides of its toggle.
 const TABS = [
-  { id: "dashboard", label: "Дашборд", mount: mountDashboard },
-  { id: "notes", label: "Заметки", mount: mountNotes },
+  {
+    id: "notes",
+    label: "Заметки",
+    views: [
+      {
+        id: "dashboard",
+        label: "Дашборд",
+        mount: (pane, ctx) =>
+          mountDashboard(pane, {
+            ...ctx,
+            openSection: (slug) => ctx.open("items", { expand: slug }),
+            openOverdue: () => ctx.open("items", { expand: OVERDUE }),
+          }),
+      },
+      { id: "items", label: "Заметки", mount: mountNotes },
+    ],
+  },
+  {
+    id: "diary",
+    label: "Дневник",
+    views: [
+      { id: "dashboard", label: "Дашборд", mount: mountDiaryBoard },
+      { id: "week", label: "Записи", mount: mountWeek },
+    ],
+  },
 ];
 
 async function boot() {
@@ -29,14 +56,6 @@ async function boot() {
   let lastTab = TABS[0].id;
   let ticket = 0;
 
-  const contexts = {
-    dashboard: {
-      openSection: (slug) => select("notes", { expand: slug }),
-      openOverdue: () => select("notes", { expand: OVERDUE }),
-      isCurrent: () => current === "dashboard",
-    },
-    notes: { isCurrent: () => current === "notes" },
-  };
 
   // Runs before the next view is swapped in: hide() may close an overlay, which resets the back button and scroll.
   function leave() {
@@ -53,7 +72,8 @@ async function boot() {
     let entry = views.get(id);
     if (!entry) {
       const pane = el("div", "pane");
-      entry = { pane, ready: TABS.find((tab) => tab.id === id).mount(pane, contexts[id]) };
+      const tab = TABS.find((t) => t.id === id);
+      entry = { pane, ready: mountToggled(pane, { isCurrent: () => current === id }, tab.views) };
       views.set(id, entry);
       entry.ready.catch(() => views.delete(id)); // a failed mount is tried again on the next tap
     }
@@ -114,7 +134,7 @@ async function boot() {
   const item = new URLSearchParams(location.search).get("item");
   if (item && /^\d+$/.test(item)) {
     reportZone();
-    select("notes", { itemId: item });
+    select("notes", { view: "items", itemId: item });
   }
   else select(TABS[0].id);
 }

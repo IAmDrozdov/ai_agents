@@ -11,20 +11,20 @@ const TOP = 12; // room for the month labels
 const WEEKDAYS = [[0, "Пн"], [2, "Ср"], [4, "Пт"]]; // prettier-ignore
 const EMPTY_HINT = "Пока пусто. Кинь боту ссылку или заметку.";
 
-const TIMEZONE = Intl.DateTimeFormat().resolvedOptions().timeZone;
+export const TIMEZONE = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
-const parseDay = (iso) => {
+export const parseDay = (iso) => {
   const [y, m, d] = iso.split("-").map(Number);
   return new Date(Date.UTC(y, m - 1, d));
 };
-const isoDay = (date) => date.toISOString().slice(0, 10);
-const addDays = (iso, n) => {
+export const isoDay = (date) => date.toISOString().slice(0, 10);
+export const addDays = (iso, n) => {
   const date = parseDay(iso);
   date.setUTCDate(date.getUTCDate() + n);
   return isoDay(date);
 };
 
-function fmtDay(iso) {
+export function fmtDay(iso) {
   return parseDay(iso).toLocaleDateString("ru-RU", { day: "numeric", month: "short", timeZone: "UTC" }).replace(".", "");
 }
 
@@ -45,35 +45,48 @@ function levelOf(n, max) {
 }
 
 function heatmap(series, board, max, field) {
-  const weeks = Math.floor((parseDay(board.to) - parseDay(board.from)) / (7 * 86400000)) + 1;
+  return dayMap({
+    from: board.from,
+    to: board.to,
+    cls: `heat ${field}`,
+    classOf: (day) => `l${levelOf(series[day] || 0, max)}`,
+    titleOf: (day) => `${fmtDay(day)}: ${series[day] || 0}`,
+  });
+}
+
+// A day grid, one column per week from `from` (a Monday) to `to`; days before `first` are left out.
+// Every cell carries data-day; classOf(day) adds to its class, titleOf(day) is its tooltip.
+export function dayMap({ from, to, first = from, cls, classOf, titleOf }) {
+  const weeks = Math.floor((parseDay(to) - parseDay(from)) / (7 * 86400000)) + 1;
   const width = LEFT + weeks * PITCH - GAP;
-  const svg = svgNode("svg", { viewBox: `0 0 ${width} ${TOP + 7 * PITCH - GAP}`, class: `heat ${field}`, role: "img" });
+  const svg = svgNode("svg", { viewBox: `0 0 ${width} ${TOP + 7 * PITCH - GAP}`, class: cls, role: "img" });
   for (const [row, label] of WEEKDAYS) {
     svg.append(svgNode("text", { x: 0, y: TOP + row * PITCH + CELL - 2, class: "heat-label" }, label));
   }
   let lastMonth = "";
   for (let week = 0; week < weeks; week += 1) {
-    const monday = addDays(board.from, week * 7);
-    const month = monthOf(monday);
+    const monday = addDays(from, week * 7);
+    const month = monthOf(monday < first ? first : monday);
     if (month !== lastMonth) {
       lastMonth = month;
       // a label this close to the right edge would be cut off
-      const crowded = week === 0 && monthOf(addDays(board.from, 7)) !== month; // the next column starts a month
+      const crowded = week === 0 && monthOf(addDays(from, 7)) !== month; // the next column starts a month
       if (weeks - week >= 3 && !crowded) svg.append(svgNode("text", { x: LEFT + week * PITCH, y: 8, class: "heat-label" }, month));
     }
     for (let row = 0; row < 7; row += 1) {
       const day = addDays(monday, row);
-      if (day > board.to) break;
-      const n = series[day] || 0;
+      if (day > to) break;
+      if (day < first) continue;
       const rect = svgNode("rect", {
         x: LEFT + week * PITCH,
         y: TOP + row * PITCH,
         width: CELL,
         height: CELL,
         rx: 2,
-        class: `cell l${levelOf(n, max)}`,
+        class: `cell ${classOf(day)}`,
+        "data-day": day,
       });
-      rect.append(svgNode("title", {}, `${fmtDay(day)}: ${n}`));
+      rect.append(svgNode("title", {}, titleOf(day)));
       svg.append(rect);
     }
   }

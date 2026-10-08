@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Production inspection in one gated SSH call each (ADR-017); output stays short and secrets are redacted.
-# Usage: [SSH_KEY=~/.ssh/key] droplet.sh status [since] | logs [service] [since] | sql <notes|bot> "<SELECT ...>" | py <file.py>
+# Usage: [SSH_KEY=~/.ssh/key] droplet.sh status [since] | logs [service] [since] | sql <notes|bot|diary> "<SELECT ...>" | py <file.py>
 # status, logs and sql only read; py runs any Python inside the bot container.
 set -euo pipefail
 
@@ -10,7 +10,7 @@ COMPOSE="docker compose -f /opt/maxi_bot/src/infrastructure/docker/docker-compos
 REDACT="sed -E 's/[0-9]{8,10}:[A-Za-z0-9_-]{30,}/<TG_TOKEN>/g; s/sk-[A-Za-z0-9_-]{20,}/<OPENAI_KEY>/g; s/tskey-[A-Za-z0-9-]+/<TS_KEY>/g; s/[0-9a-f]{64}/<HEX64>/g'"
 
 usage() {
-  echo "usage: droplet.sh status [since=60m] | logs [service=bot] [since=15m] | sql <notes|bot> \"<SELECT ...>\" | py <file.py>" >&2
+  echo "usage: droplet.sh status [since=60m] | logs [service=bot] [since=15m] | sql <notes|bot|diary> \"<SELECT ...>\" | py <file.py>" >&2
   exit 2
 }
 
@@ -57,6 +57,7 @@ REMOTE
     case "$2" in
       notes) db=/data/notes.sqlite3 ;;
       bot) db=/data/telegram_bot.sqlite3 ;;
+      diary) db=/data/diary.sqlite3 ;;
       *) usage ;;
     esac
     # The query travels on stdin, so no shell quoting on either side can break it. mode=ro alone

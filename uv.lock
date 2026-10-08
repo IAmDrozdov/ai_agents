@@ -15,6 +15,7 @@ resolution-markers = [
 
 [manifest]
 members = [
+    "diary",
     "doc-translator",
     "maxi-bot",
     "notes",
@@ -362,6 +363,11 @@ sdist = { url = "https://files.pythonhosted.org/packages/d3/f4/561c49bca97af561d
 wheels = [
     { url = "https://files.pythonhosted.org/packages/8b/7c/2e5dcf53909deddd0bf38cbe277ad9806be038276b1c6c436561b4d9b2e2/dateparser-1.4.1-py3-none-any.whl", hash = "sha256:f25d4e051a84be27a35bd297e3e1dc59ff78373701b89be352ba80372d22d0d0", size = 300503, upload-time = "2026-06-15T08:45:45.951Z" },
 ]
+
+[[package]]
+name = "diary"
+version = "0.0.0"
+source = { editable = "apps/diary" }
 
 [[package]]
 name = "distlib"
@@ -1971,6 +1977,7 @@ source = { editable = "interfaces/telegram_bot" }
 dependencies = [
     { name = "aiogram" },
     { name = "aiohttp" },
+    { name = "diary" },
     { name = "doc-translator" },
     { name = "fastapi" },
     { name = "notes" },
@@ -1991,6 +1998,7 @@ dependencies = [
 requires-dist = [
     { name = "aiogram", specifier = ">=3.15" },
     { name = "aiohttp", specifier = ">=3.10" },
+    { name = "diary", editable = "apps/diary" },
     { name = "doc-translator", editable = "workflows/doc_translator" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "notes", editable = "apps/notes" },

@@ -13,7 +13,7 @@ shared/       -> env/settings, the job contract, pricing, document intake, provi
 
 Source of truth: `tools/check_layers.py`.
 
-- `interfaces/*` MAY import `shared.*`, `workflows.<any>`, apps (`notes`).
+- `interfaces/*` MAY import `shared.*`, `workflows.<any>`, apps (`notes`, `diary`).
 - `interfaces/*` MUST NOT import `langchain*`, `langgraph*`, `openai`, `anthropic`.
 - `shared/*` MUST NOT import `workflows.*`, `interfaces.*`, apps.
 - `workflows/<a>/*` MUST NOT import `workflows/<b>/*`.
@@ -82,7 +82,12 @@ it does not go through `shared.job`. Shape:
 apps/notes/
 ├── pyproject.toml, README.md, CONTEXT.md (own glossary), docs/ (ADRs, spec, tickets)
 └── src/notes/          domain/, capture.py, db.py, enrich/, classify/, sweeper.py, smoke.py
+apps/diary/
+├── pyproject.toml, README.md, CONTEXT.md (own glossary)
+└── src/diary/          domain.py (every diary rule), db.py
 ```
+
+The diary (ADR-020) has no chat side: only `telegram_bot/miniapp/api_diary.py` reaches it.
 
 Its interfaces follow the same thin-adapter rule: `telegram_bot/handlers/notes.py` and
 `notes_ui.py` parse and render, `telegram_bot/miniapp` serves the Mini App (ADR-016). The admin's single
@@ -117,5 +122,6 @@ state dicts.
 | descriptor (preview/estimate/run) | `workflows/<name>/runtime.py` |
 | tracing bootstrap | `shared/obs/tracing.py` |
 | notes domain, store, enrichment, classifier port | `apps/notes/src/notes/*` |
+| diary domain and store | `apps/diary/src/diary/*` |
 | incoming message → Path | `telegram_bot/routing.py` |
 | notes Telegram presentation / intake / Mini App | `telegram_bot/notes_ui.py`, `notes_capture.py`, `handlers/notes.py` / `telegram_bot/miniapp` |

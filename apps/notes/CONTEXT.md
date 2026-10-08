@@ -106,7 +106,7 @@ Whether the Owner has taken an Item up yet: todo, or done once they have — a s
 _Avoid_: state, stage, progress, viewed, started, archived, open, closed
 
 **Dashboard**:
-The Mini App's first tab, infographics only: how many Items are todo and how many of them are Overdue, how many were Captured and done each day, and how the todo Items spread over Sections; tapping a Section there, or the Overdue count, opens it in the Items tab.
+The notes tab's first view (the other is the Items), infographics only: how many Items are todo and how many of them are Overdue, how many were Captured and done each day, and how the todo Items spread over Sections; tapping a Section there, or the Overdue count, opens it in the Items view.
 _Avoid_: overview, home, stats, обзор
 
 **Search**:

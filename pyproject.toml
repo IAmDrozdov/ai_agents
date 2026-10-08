@@ -28,4 +28,4 @@ select = ["E", "F", "I", "B", "UP", "SIM"]
 ignore = ["E501"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["shared", "doc_translator", "pdf_tts", "yt_dub", "notes", "telegram_bot", "smoke"]
+known-first-party = ["shared", "doc_translator", "pdf_tts", "yt_dub", "notes", "diary", "telegram_bot", "smoke"]

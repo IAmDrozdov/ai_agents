@@ -11,11 +11,13 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.gzip import GZipMiddleware
 
+from diary.db import Database as DiaryDatabase
+from diary.domain import DiaryError
 from notes.db import Database
 from notes.domain.sections import SectionError
 
 from .. import db
-from . import api_notes, api_usage, auth
+from . import api_diary, api_notes, api_usage, auth
 
 STATIC = Path(__file__).parent / "static"
 IMMUTABLE = "public, max-age=31536000, immutable"
@@ -44,7 +46,7 @@ def render_shell(directory: Path, build: str) -> str:
     return html.replace("<!-- modulepreload -->", links).replace('"/static/', f'"/static/{build}/')
 
 
-def create_app(notes_db: Database) -> FastAPI:
+def create_app(notes_db: Database, diary_db: DiaryDatabase) -> FastAPI:
     db.init_db()
     build = build_id(STATIC)
     shell = render_shell(STATIC, build)
@@ -52,10 +54,12 @@ def create_app(notes_db: Database) -> FastAPI:
     app = FastAPI(title="miniapp", docs_url=None, redoc_url=None, openapi_url=None)
     app.state.init_secret = auth.init_secret()
     app.state.notes_db = notes_db
+    app.state.diary_db = diary_db
     # Any build segment serves the current files, so a shell from before a deploy still loads.
     app.mount("/static/{build}", StaticFiles(directory=STATIC), name="assets")
     app.include_router(api_usage.router)
     app.include_router(api_notes.router)
+    app.include_router(api_diary.router)
     # Inside the header middleware: that one streams every response, which gzip would compress regardless of size.
     app.add_middleware(GZipMiddleware, minimum_size=500, compresslevel=6)
 
@@ -79,6 +83,10 @@ def create_app(notes_db: Database) -> FastAPI:
     @app.exception_handler(SectionError)
     async def section_error(request: Request, exc: SectionError) -> JSONResponse:
         return JSONResponse({"detail": str(exc)}, status_code=400)
+
+    @app.exception_handler(DiaryError)
+    async def diary_error(request: Request, exc: DiaryError) -> JSONResponse:
+        return JSONResponse({"detail": str(exc)}, status_code=422)
 
     @app.get("/healthz")
     def healthz() -> dict[str, str]:

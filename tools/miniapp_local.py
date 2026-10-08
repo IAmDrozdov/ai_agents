@@ -17,7 +17,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from urllib.parse import quote, urlencode
 
@@ -28,11 +28,13 @@ PID_FILE = WORK / "miniapp.pid"
 LOG_FILE = WORK / "server.log"
 NOTES_DB = WORK / "notes.sqlite3"
 BOT_DB = WORK / "bot.sqlite3"
+DIARY_DB = WORK / "diary.sqlite3"
 
 TEST_ADMIN_ID = 100  # the only id the local server admits
 HOST = "127.0.0.1"
 SOURCE_NOTES = "notes.sqlite3"
 SOURCE_BOT = "telegram_bot.sqlite3"
+SOURCE_DIARY = "diary.sqlite3"
 
 
 def init_secret(token: str) -> str:
@@ -97,6 +99,32 @@ def seed_notes(path: Path) -> None:
     reminders.fill_from_filing(
         db, stored, (now - timedelta(days=1)).replace(tzinfo=None), "UTC", now=now
     )
+
+
+def seed_diary(path: Path) -> None:
+    """Four 🧪 Weeks up to yesterday (always across a month boundary): Marks of all three kinds,
+    Entries at every Level, a gap; today is left empty so the Streak counts from yesterday."""
+    from diary import domain
+    from diary.db import Database
+
+    db = Database(str(path))
+    db.init()
+    pool = ("🧪 тренировка", "🧪 читал", "🧪 код", "🧪 прогулка", "🧪 готовил", "🧪 английский")
+    today = date.today()
+    for back in range(1, 29):
+        day = today - timedelta(days=back)
+        if back == 9:
+            domain.set_mark(db, day, "meh")  # a Mark-only Day breaks the Streak
+            continue
+        for n in range(1 + back % 3):
+            domain.add_entry(db, day, pool[(back + n * 2) % len(pool)])
+        domain.set_mark(db, day, (None, "fire", "meh", "dead")[back % 4])
+    raised = {"week": (2, 5, 12), "month": (5, 12), "year": (12,)}
+    for level, backs in raised.items():
+        for back in backs:
+            first = domain.day(db, today - timedelta(days=back)).entries[0]
+            for _ in range(domain.LEVELS.index(level) - domain.LEVELS.index(first.level)):
+                domain.raise_entry(db, first.id)
 
 
 def seed_jobs(path: Path) -> None:
@@ -195,8 +223,11 @@ def start(args: argparse.Namespace) -> int:
         copy_db(source / SOURCE_NOTES, NOTES_DB)
         if (source / SOURCE_BOT).is_file():
             copy_db(source / SOURCE_BOT, BOT_DB)
+        if (source / SOURCE_DIARY).is_file():
+            copy_db(source / SOURCE_DIARY, DIARY_DB)
     else:
         seed_notes(NOTES_DB)
+        seed_diary(DIARY_DB)
     for db in WORK.glob("*.sqlite3*"):
         db.chmod(0o600)
 
@@ -209,6 +240,7 @@ def start(args: argparse.Namespace) -> int:
         "ADMIN_TELEGRAM_ID": str(TEST_ADMIN_ID),
         "NOTES_DB_PATH": str(NOTES_DB),
         "TELEGRAM_DB_PATH": str(BOT_DB),
+        "DIARY_DB_PATH": str(DIARY_DB),
         "MINIAPP_INIT_SECRET": secret,
     }
     with LOG_FILE.open("wb") as log:
@@ -264,7 +296,9 @@ def main() -> int:
     sub = parser.add_subparsers(dest="cmd", required=True)
     p_up = sub.add_parser("up", help="seed throwaway DBs, start the server, write the signed URL")
     p_up.add_argument(
-        "--from-db-dir", metavar="DIR", help="copy notes.sqlite3 and telegram_bot.sqlite3 from DIR"
+        "--from-db-dir",
+        metavar="DIR",
+        help="copy notes.sqlite3, telegram_bot.sqlite3 and diary.sqlite3 from DIR",
     )
     p_up.add_argument("--port", type=int, default=18083)
     p_up.set_defaults(func=up)

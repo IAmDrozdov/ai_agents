@@ -32,6 +32,7 @@ SNAPSHOT_PROGRAM = REPO_ROOT / "infrastructure" / "backup_snapshot.py"
 GATE = REPO_ROOT / "infrastructure" / "ssh-gate.sh"
 COMPOSE = "docker compose -f /opt/maxi_bot/src/infrastructure/docker/docker-compose.yml"
 DATABASES = ("notes.sqlite3", "telegram_bot.sqlite3")
+OPTIONAL = ("diary.sqlite3",)  # in the Backup once it exists on the droplet (ADR-020)
 
 HOME = Path.home()
 ICLOUD_DRIVE = HOME / "Library/Mobile Documents/com~apple~CloudDocs"
@@ -267,7 +268,7 @@ def unpack(stream: bytes, day: Path) -> dict[str, Any]:
         raise BackupError(f"snapshot stream is not a tar: {e}") from None
     if "meta.json" not in members or any(name not in members for name in DATABASES):
         raise BackupError(f"snapshot stream is incomplete: {sorted(members)}")
-    for name in DATABASES:
+    for name in DATABASES + tuple(n for n in OPTIONAL if n in members):
         (day / name).write_bytes(members[name])
     return json.loads(members["meta.json"])
 
@@ -285,7 +286,7 @@ def verify(day: Path, meta: dict[str, Any]) -> tuple[dict[str, Any], sqlite3.Con
     """Checksum, integrity and row counts of each staged copy; returns the manifest entries."""
     entries: dict[str, Any] = {}
     notes: sqlite3.Connection | None = None
-    for name in DATABASES:
+    for name in DATABASES + tuple(n for n in OPTIONAL if n in meta):
         data = (day / name).read_bytes()
         expected = meta[name]
         digest = hashlib.sha256(data).hexdigest()
