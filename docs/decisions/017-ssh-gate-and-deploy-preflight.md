@@ -29,7 +29,7 @@ code-only deploy rewrote a 240 MB layer.
    before the dependencies, and `/app` stays root-owned (the container root is read-only). The
    layers went from about 860 MB to about 380 MB, and a code-only deploy writes about 3 MB instead
    of 245 MB and takes under a minute. `deploy.sh` tags the image that was running as
-   `ai_agents:previous` when the new one differs in its layers (the image id changes on every
+   `maxi_bot:previous` when the new one differs in its layers (the image id changes on every
    build, so it is not the test), and prunes build cache older than a day.
 6. **Host.** sshd refuses agent forwarding and remote forwarding and allows three attempts; the
    journal is capped at 100 MB; multipathd, ModemManager, udisks2 and fwupd are off. The droplet

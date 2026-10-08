@@ -73,5 +73,5 @@ Full infra docs: `infrastructure/README.md` (ADR-008); what each service does:
 
 ## Rollback
 
-[rollback.md](rollback.md): the fast `ai_agents:previous` rollback, going further back, and why the
+[rollback.md](rollback.md): the fast `maxi_bot:previous` rollback, going further back, and why the
 data survives a deploy.

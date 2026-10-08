@@ -4,7 +4,7 @@
 
 **Blocked by:** 06 — Filing keyboard on the Acknowledgement
 
-**Status:** replaced by the Mini App (ai_agents ADR-016). `/list` is dropped; the Заметки tab browses Sections and pages of items. The criteria below are history.
+**Status:** replaced by the Mini App (maxi-bot ADR-016). `/list` is dropped; the Заметки tab browses Sections and pages of items. The criteria below are history.
 
 - [ ] `/list` produces one message listing the eight starter Sections with their emoji, names and active counts (seams 6 and 1)
 - [ ] Opening a Section with seven active Items shows five with a ▶️ button; page two shows the remaining two with a ◀️ button (seam 6)

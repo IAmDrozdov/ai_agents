@@ -6,5 +6,5 @@ exclude:
   # Terraform provider binary (local tooling, never deployed).
   - ./infrastructure/terraform/.terraform/**
 ignore:
-  # Name collision: the root project "ai-agents" is not PyPI's aiwaves-cn "agents".
+  # Name collision: the root project "maxi-bot" is not PyPI's aiwaves-cn "agents".
   - vulnerability: GHSA-ch88-c67q-65r9

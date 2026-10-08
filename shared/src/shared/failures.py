@@ -71,7 +71,7 @@ class Failure:
 def _status_page() -> tuple[str | None, str | None]:
     """(indicator, incident_title) from the provider's status page. Best effort."""
     try:
-        request = urllib.request.Request(_STATUS_URL, headers={"User-Agent": "ai-agents-bot/1.0"})
+        request = urllib.request.Request(_STATUS_URL, headers={"User-Agent": "maxi-bot-bot/1.0"})
         with urllib.request.urlopen(request, timeout=_STATUS_TIMEOUT_S) as response:
             data: dict[str, Any] = json.load(response)
     except (urllib.error.URLError, TimeoutError, ValueError, OSError) as exc:

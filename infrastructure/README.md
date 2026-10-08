@@ -91,9 +91,9 @@ and exactly the files rsync would ship, then `grype dir:. --only-fixed`, which f
 finding stops the deploy; `SKIP_PREFLIGHT=1` skips the preflight for an emergency redeploy. The
 rest runs inside the SSH gate.
 
-Rsyncs the repo to `/opt/ai_agents/src`, uploads **only** `OPENAI_API_KEY`,
+Rsyncs the repo to `/opt/maxi_bot/src`, uploads **only** `OPENAI_API_KEY`,
 `TELEGRAM_BOT_TOKEN`, `ADMIN_TELEGRAM_ID`, `LOG_LEVEL`, `YTDLP_PROXY` and the `BOT_*`/`NOTES_*`
-operator settings from `.env` as `/opt/ai_agents/bot.env` (0600). The Mini App container gets its
+operator settings from `.env` as `/opt/maxi_bot/bot.env` (0600). The Mini App container gets its
 own `miniapp.env`: `ADMIN_TELEGRAM_ID`, `LOG_LEVEL` and `MINIAPP_INIT_SECRET`, a key derived from
 the bot token on your machine (so `python3` must be on your PATH); the token itself never reaches
 it. The Funnel sidecar gets `funnel.env` with `TS_AUTHKEY` only. It builds the image **on the
@@ -101,26 +101,26 @@ droplet** (all deps ship manylinux wheels; 1 GB RAM + swap is enough), and runs
 `docker compose up -d --remove-orphans`. With `WARP_ACCEPT_TOS=yes` in `.env` it also starts the
 optional `warp` egress sidecar (ADR-014), and with `TS_AUTHKEY` set the `funnel` sidecar (ADR-016).
 
-A deploy that changes the image tags the one that was running as `ai_agents:previous`; a re-run
-with no changes leaves `previous` alone and restarts nothing (a leftover `ai_agents:before-build`
+A deploy that changes the image tags the one that was running as `maxi_bot:previous`; a re-run
+with no changes leaves `previous` alone and restarts nothing (a leftover `maxi_bot:before-build`
 tag is then normal: it names the image the running containers still use). Build cache older than
 a day is dropped. To roll back without rebuilding:
 
 ```bash
-./infrastructure/ssh-gate.sh ssh 'docker tag ai_agents:previous ai_agents:latest && docker compose -f /opt/ai_agents/src/infrastructure/docker/docker-compose.yml up -d'
+./infrastructure/ssh-gate.sh ssh 'docker tag maxi_bot:previous maxi_bot:latest && docker compose -f /opt/maxi_bot/src/infrastructure/docker/docker-compose.yml up -d'
 ```
 
 Fallback if an on-droplet build ever fails: build locally for amd64 and ship
 the image without a registry:
 
 ```bash
-docker buildx build --platform linux/amd64 -f infrastructure/docker/Dockerfile -t ai_agents:latest .
-docker save ai_agents:latest | ./infrastructure/ssh-gate.sh ssh docker load
+docker buildx build --platform linux/amd64 -f infrastructure/docker/Dockerfile -t maxi_bot:latest .
+docker save maxi_bot:latest | ./infrastructure/ssh-gate.sh ssh docker load
 ```
 
 ## Mini App (Tailscale Funnel)
 
-The admin Mini App is published by the `funnel` sidecar at `https://ai-agents.<tailnet>.ts.net`.
+The admin Mini App is published by the `funnel` sidecar at `https://maxi-bot.<tailnet>.ts.net`.
 One-time setup (yours; it needs a Tailscale account):
 
 1. Create a free Tailscale account. In the admin console under **DNS**, turn on MagicDNS and
@@ -128,14 +128,14 @@ One-time setup (yours; it needs a Tailscale account):
 2. Under **Access controls**, the policy file must grant Funnel. Add
    `{"target": ["autogroup:member"], "attr": ["funnel"]}` to `nodeAttrs` if it is missing.
 3. Under **Settings → Keys**, generate an auth key: not ephemeral, pre-approved.
-4. In `.env` set `TS_AUTHKEY=tskey-auth-…` and `BOT_MINIAPP_URL=https://ai-agents.<tailnet>.ts.net`,
+4. In `.env` set `TS_AUTHKEY=tskey-auth-…` and `BOT_MINIAPP_URL=https://maxi-bot.<tailnet>.ts.net`,
    then deploy.
-5. After the first deploy, open **Machines → ai-agents → Disable key expiry**. Otherwise the node
+5. After the first deploy, open **Machines → maxi-bot → Disable key expiry**. Otherwise the node
    drops off after about 180 days and the app stops loading.
 
 The node's identity lives in the `tsstate` volume; `terraform destroy` deletes it and a new auth
-key is then needed. If a machine named `ai-agents` already exists in the tailnet, the new node
-becomes `ai-agents-1` and the URL no longer matches: delete the old machine in the console.
+key is then needed. If a machine named `maxi-bot` already exists in the tailnet, the new node
+becomes `maxi-bot-1` and the URL no longer matches: delete the old machine in the console.
 
 If your own computer is on the tailnet, Chrome on it cannot show the app inside Telegram Web (the
 name resolves to a private tailnet address, which Chrome refuses for a public page's frame). Phones
@@ -166,7 +166,7 @@ Python inside the bot container:
 ./infrastructure/droplet.sh sql notes "SELECT ..."  # read-only query on notes or bot; at most 200 rows
 ./infrastructure/droplet.sh py probe.py             # run a local Python file inside the bot container
 G=./infrastructure/ssh-gate.sh
-$G ssh 'docker compose -f /opt/ai_agents/src/infrastructure/docker/docker-compose.yml logs -f bot'
+$G ssh 'docker compose -f /opt/maxi_bot/src/infrastructure/docker/docker-compose.yml logs -f bot'
 ```
 
 Never copy the databases by hand: they are WAL with two writers, and sqlite run as root on the
@@ -185,8 +185,8 @@ SSH_KEY=~/.ssh/<key> uv run python infrastructure/backup.py install       # hour
 uv run python infrastructure/backup.py uninstall
 ```
 
-- **Where:** `~/Library/Mobile Documents/com~apple~CloudDocs/Backups/ai-agents/`, or
-  `AI_AGENTS_BACKUP_DIR`. It holds one `YYYY-MM-DD/` folder per day (`notes.sqlite3`,
+- **Where:** `~/Library/Mobile Documents/com~apple~CloudDocs/Backups/maxi-bot/`, or
+  `MAXI_BOT_BACKUP_DIR`. It holds one `YYYY-MM-DD/` folder per day (`notes.sqlite3`,
   `telegram_bot.sqlite3`, `manifest.json`) and one shared `files/` folder with
   `<item id>-<file_id hash>-<name>.<ext>`. The hash is there because a restore hands out old Item ids
   again. The newest 30 days are kept.
@@ -195,16 +195,16 @@ uv run python infrastructure/backup.py uninstall
   API's 20 MB download limit).
 - **Runs:** without `--force`, a run does nothing once today's Backup exists. With it, a run waits
   for one in progress and keeps today's earlier Backup as `YYYY-MM-DD-HHMMSS/`. `install` writes the
-  LaunchAgent `local.ai-agents.backup` for this machine, carrying over `SSH_KEY` and
-  `AI_AGENTS_BACKUP_DIR` from your shell.
-- **Log and alerts:** the log is `~/Library/Logs/ai-agents-backup.log`. A macOS banner plus the bot's
-  message "⚠️ ai_agents backup …" to the admin, at most once a day per reason, comes for:
+  LaunchAgent `local.maxi-bot.backup` for this machine, carrying over `SSH_KEY` and
+  `MAXI_BOT_BACKUP_DIR` from your shell.
+- **Log and alerts:** the log is `~/Library/Logs/maxi-bot-backup.log`. A macOS banner plus the bot's
+  message "⚠️ maxi-bot backup …" to the admin, at most once a day per reason, comes for:
   - a failed run: from the second failure in a row, or at once when the last good Backup is over
     48 hours old (one failure right after a wake, before the network is up, says nothing);
   - a file that could not be fetched.
 
   A schedule that stopped running cannot alert about itself: glance at the folder now and then.
-- **Offline check:** `NOTES_DB_PATH=… TELEGRAM_DB_PATH=… AI_AGENTS_BACKUP_DIR=<scratch> uv run python
+- **Offline check:** `NOTES_DB_PATH=… TELEGRAM_DB_PATH=… MAXI_BOT_BACKUP_DIR=<scratch> uv run python
   infrastructure/backup.py run --source local` runs the whole pipeline on local databases. It sends
   no bot message: it logs "would send" instead.
 
@@ -213,8 +213,8 @@ uv run python infrastructure/backup.py uninstall
 
 ```bash
 G=./infrastructure/ssh-gate.sh
-C="docker compose -f /opt/ai_agents/src/infrastructure/docker/docker-compose.yml"
-D="$HOME/Library/Mobile Documents/com~apple~CloudDocs/Backups/ai-agents/<YYYY-MM-DD>"
+C="docker compose -f /opt/maxi_bot/src/infrastructure/docker/docker-compose.yml"
+D="$HOME/Library/Mobile Documents/com~apple~CloudDocs/Backups/maxi-bot/<YYYY-MM-DD>"
 $G ssh "$C stop bot miniapp"                                           # 1. stop both writers
 for f in notes.sqlite3 telegram_bot.sqlite3; do                        # 2. put the copies in place
   $G ssh "cd \$(docker volume inspect -f '{{.Mountpoint}}' docker_appdata) && cat > $f.restore \

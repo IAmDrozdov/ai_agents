@@ -1,12 +1,12 @@
 # Rolling back a deploy
 
-A deploy that changes the image tags the one that was running as `ai_agents:previous` (a re-run
+A deploy that changes the image tags the one that was running as `maxi_bot:previous` (a re-run
 with no changes leaves it alone), so the fast rollback needs no rebuild:
 ```bash
-./infrastructure/ssh-gate.sh ssh 'docker tag ai_agents:previous ai_agents:latest && docker compose -f /opt/ai_agents/src/infrastructure/docker/docker-compose.yml up -d'
+./infrastructure/ssh-gate.sh ssh 'docker tag maxi_bot:previous maxi_bot:latest && docker compose -f /opt/maxi_bot/src/infrastructure/docker/docker-compose.yml up -d'
 ```
 `previous` moves on every deploy that changes the image. To keep a point across several deploys, tag it yourself
-(`docker tag ai_agents:latest ai_agents:rollback-<n>` on the droplet) and delete the tag when it is
+(`docker tag maxi_bot:latest maxi_bot:rollback-<n>` on the droplet) and delete the tag when it is
 no longer needed. The droplet has no git history, so going further back means redeploying older
 code from your machine:
 ```bash

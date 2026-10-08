@@ -1,6 +1,6 @@
 # 11 — Mini App walking skeleton
 
-**What to build:** The admin's chat gets a `📒` menu button that opens the Mini App (ai_agents ADR-016): a Russian app with a Заметки tab (Section chips, Активные / Архив / Корзина, item cards, re-enrich) and a Расходы tab (the retired dashboard's totals, per-user spend and job history). The Tailscale Funnel sidecar publishes it over HTTPS, and every `/api` call needs Telegram-signed data from the admin. The SSH-tunnel `dashboard` and `notes-web` services are retired.
+**What to build:** The admin's chat gets a `📒` menu button that opens the Mini App (maxi-bot ADR-016): a Russian app with a Заметки tab (Section chips, Активные / Архив / Корзина, item cards, re-enrich) and a Расходы tab (the retired dashboard's totals, per-user spend and job history). The Tailscale Funnel sidecar publishes it over HTTPS, and every `/api` call needs Telegram-signed data from the admin. The SSH-tunnel `dashboard` and `notes-web` services are retired.
 
 **Blocked by:** 05 — Filing and Gist by the Classifier
 

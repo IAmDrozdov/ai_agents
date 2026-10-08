@@ -1,6 +1,6 @@
 # 08 — Sorting pass in the Mini App
 
-**What to build:** The Mini App's Заметки tab becomes the sorting surface (ai_agents ADR-016; the SSH-tunnel web UI this ticket was written for is gone). Filters by Sections (several at once), Status, Placement and unreviewed; pages of 50; an item view, opened from a card or from the `✏️ Открыть` button on a saved-item message (`/?item=<id>`), to set Sections, Status, Placement and Reviewed, edit the Annotation, re-enrich, and hard-delete a trashed Item; bulk actions to archive everything done, mark the current list reviewed, and empty the Trash. Every `/api` call needs Telegram-signed data from the admin. The UI is Russian.
+**What to build:** The Mini App's Заметки tab becomes the sorting surface (maxi-bot ADR-016; the SSH-tunnel web UI this ticket was written for is gone). Filters by Sections (several at once), Status, Placement and unreviewed; pages of 50; an item view, opened from a card or from the `✏️ Открыть` button on a saved-item message (`/?item=<id>`), to set Sections, Status, Placement and Reviewed, edit the Annotation, re-enrich, and hard-delete a trashed Item; bulk actions to archive everything done, mark the current list reviewed, and empty the Trash. Every `/api` call needs Telegram-signed data from the admin. The UI is Russian.
 
 **Blocked by:** 11 — Mini App walking skeleton
 

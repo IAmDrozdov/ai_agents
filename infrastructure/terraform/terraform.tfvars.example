@@ -8,7 +8,7 @@ ssh_key_name = "my-laptop"
 # Optional overrides (defaults shown).
 # region       = "fra1"
 # droplet_size = "s-1vcpu-1gb"
-# droplet_name = "ai-agents"
+# droplet_name = "maxi-bot"
 
 # SSH is closed by default: infrastructure/ssh-gate.sh (and deploy.sh through it) opens
 # port 22 for your current address and closes it again (ADR-017). A static list here is a

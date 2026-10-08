@@ -2,18 +2,18 @@
 
 Status: ready-for-agent
 
-> **Merged into ai_agents (2026-09-29, ADR-015).** This spec was written for the standalone
+> **Merged into maxi-bot (2026-09-29, ADR-015).** This spec was written for the standalone
 > `maxi-notes` repo. Where it disagrees with the merge, the merge wins:
-> - **Bot:** no own bot. The Owner is the ai_agents admin (`ADMIN_TELEGRAM_ID`). Capture is
+> - **Bot:** no own bot. The Owner is the maxi-bot admin (`ADMIN_TELEGRAM_ID`). Capture is
 >   **ask first**: anything sent gets a card with 💾 В заметки, the priced agents, and Cancel. 💾
 >   turns the card into the Acknowledgement. There is no automatic Capture of every message.
 >   Invitees never see notes. A saved link's Acknowledgement carries a 🤖 button back to the agents.
 > - **Classifier:** OpenAI, not Claude (ticket 05). `CLASSIFIER_*` settings are `NOTES_CLASSIFIER_*`.
-> - **Testing:** no automated tests (ai_agents ADR-001). "Testing Decisions" and every "(seam N)"
+> - **Testing:** no automated tests (maxi-bot ADR-001). "Testing Decisions" and every "(seam N)"
 >   tag below are historical; checks are manual or through `uv run notes-smoke`.
-> - **Deployment:** services `bot` (shared) and `miniapp` in the ai_agents compose stack, sqlite at
+> - **Deployment:** services `bot` (shared) and `miniapp` in the maxi-bot compose stack, sqlite at
 >   `/data/notes.sqlite3` on its `appdata` volume. There is no `maxi-notes` compose project.
-> - **Web UI:** replaced by the admin Mini App (ai_agents ADR-016), served by the `miniapp` service.
+> - **Web UI:** replaced by the admin Mini App (maxi-bot ADR-016), served by the `miniapp` service.
 >   Story 27 (SSH tunnel, no login page) and the "Telegram Mini App or any public HTTPS ingress;
 >   authentication on the web UI" out-of-scope line no longer apply: the app is public over HTTPS and
 >   every API call needs Telegram-signed data from the admin. Wherever this spec says "the web", read
@@ -128,8 +128,8 @@ sqlite in WAL mode, one file on a shared volume, read and written by both proces
 
 ### Deployment
 
-- Own repository, own Docker Compose project (`maxi-notes`) on the ai_agents droplet: one image, services `bot` (memory cap 300 MB) and `web` (160 MB, published on 127.0.0.1:8082), one named volume for sqlite. Hardened like ai_agents: non-root, read-only image, dropped capabilities, tmpfs `/tmp`, pid limits, bounded logs.
-- Deploy script: rsync the repo to `/opt/maxi-notes/src`, upload an allow-listed env file (bot token, Owner id, LLM key, classifier settings, housekeeping knobs, log level; the web service gets no secrets), build on the droplet, start, and wait for the health endpoint and the bot's "polling as @" log line. Droplet IP from an argument or from the ai_agents Terraform output. Terraform and the firewall are never touched from this repo.
+- Own repository, own Docker Compose project (`maxi-notes`) on the maxi-bot droplet: one image, services `bot` (memory cap 300 MB) and `web` (160 MB, published on 127.0.0.1:8082), one named volume for sqlite. Hardened like maxi_bot: non-root, read-only image, dropped capabilities, tmpfs `/tmp`, pid limits, bounded logs.
+- Deploy script: rsync the repo to `/opt/maxi-notes/src`, upload an allow-listed env file (bot token, Owner id, LLM key, classifier settings, housekeeping knobs, log level; the web service gets no secrets), build on the droplet, start, and wait for the health endpoint and the bot's "polling as @" log line. Droplet IP from an argument or from the maxi-bot Terraform output. Terraform and the firewall are never touched from this repo.
 - Configuration via environment / `.env`: bot token, Owner id, LLM key, classifier provider/model/effort, database path, web host/port, trash TTL days, sweep interval, log level.
 
 ## Testing Decisions
@@ -138,7 +138,7 @@ sqlite in WAL mode, one file on a shared volume, read and written by both proces
 - A good test verifies behaviour through a public interface and survives refactors; expected values are independent literals from this spec; nothing verifies by reading the database behind the interface.
 - Seams under test (pre-agreed): (1) the domain API over a real temporary sqlite file; (2) URL normalisation and extraction as pure functions; (3) each Enrichment provider over saved fixture payloads through the HTTP port; (4) the Enrichment pipeline with fake HTTP, fake Classifier and a recording Telegram session; (5) the Classifier request rendering and the Claude adapter's mapping over a stubbed SDK client; (6) the bot through the real dispatcher fed synthetic updates, observed through a recording Telegram session; (7) the web through the ASGI test client, verified by follow-up requests.
 - Fakes only at system boundaries: the Telegram API session, the LLM SDK client, outbound HTTP, and the clock (domain functions that compare times accept `now`). The database is never faked. No test touches the network or needs a real API key.
-- Prior art: none in this repository; the sibling ai_agents repo has no tests by its own decision, so the patterns come from the tdd skill rather than from existing code.
+- Prior art: none in this repository; the sibling maxi-bot repo has no tests by its own decision, so the patterns come from the tdd skill rather than from existing code.
 
 ## Out of Scope
 
@@ -149,11 +149,11 @@ sqlite in WAL mode, one file on a shared volume, read and written by both proces
 - Instagram private content via cookies or any automation of the Owner's account (forbidden by ADR-0005).
 - An OpenAI adapter (the port exists; the adapter does not).
 - Automatic archiving rules; per-Section Status vocabularies.
-- Editing Terraform or the firewall in ai_agents.
+- Editing Terraform or the firewall in maxi-bot.
 - Live-LLM or live-network tests.
 
 ## Further Notes
 
-- Droplet memory: 1 GB RAM + 2 GB swap shared with ai_agents (its bot is capped at 700 MB). If the two caps here don't fit, the knob is a bigger droplet, not lifting caps.
+- Droplet memory: 1 GB RAM + 2 GB swap shared with maxi-bot (its bot is capped at 700 MB). If the two caps here don't fit, the knob is a bigger droplet, not lifting caps.
 - oEmbed rate limits (1,000/h on the token route; possibly lower tokenless) are irrelevant at single-owner volume.
 - The Owner may switch the default model to a cheaper one at any time by configuration; the default follows the current API reference.

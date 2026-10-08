@@ -26,7 +26,7 @@ def main() -> None:
     if settings.admin_telegram_id is None:
         log.error("ADMIN_TELEGRAM_ID is not set — refusing to start")
         sys.exit(1)
-    init_tracing(settings=settings, service_name="ai-agents-miniapp")
+    init_tracing(settings=settings, service_name="maxi-bot-miniapp")
     notes_db = Database(settings.notes_db_path)
     notes_db.init()
     log.info("mini app on %s:%s (notes=%s)", args.host, args.port, settings.notes_db_path)

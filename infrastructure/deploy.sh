@@ -9,7 +9,7 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SSH_KEY="${SSH_KEY:-}"
 IP="${1:-$(terraform -chdir="$REPO_ROOT/infrastructure/terraform" output -raw droplet_ipv4)}"
 SSH_OPTS=(${SSH_KEY:+-i "$SSH_KEY"} -o StrictHostKeyChecking=accept-new)
-COMPOSE="docker compose -f /opt/ai_agents/src/infrastructure/docker/docker-compose.yml"
+COMPOSE="docker compose -f /opt/maxi_bot/src/infrastructure/docker/docker-compose.yml"
 APP_UID=10001
 RSYNC_EXCLUDES=(
   --exclude .git --exclude .venv --exclude '.env*' --exclude '__pycache__'
@@ -66,11 +66,11 @@ if [ -n "$TS_AUTHKEY" ]; then
   [ -n "$MINIAPP_URL" ] || echo "WARNING: TS_AUTHKEY is set but BOT_MINIAPP_URL is not: the bot will not offer the app" >&2
 fi
 
-echo "==> syncing repo to root@$IP:/opt/ai_agents/src"
+echo "==> syncing repo to root@$IP:/opt/maxi_bot/src"
 rsync -az --delete \
   -e "ssh ${SSH_OPTS[*]}" \
   "${RSYNC_EXCLUDES[@]}" \
-  "$REPO_ROOT/" "root@$IP:/opt/ai_agents/src/"
+  "$REPO_ROOT/" "root@$IP:/opt/maxi_bot/src/"
 
 echo "==> uploading bot.env (allow-listed keys only)"
 # Only the bot container needs secrets, plus the BOT_*/NOTES_* policy; DO_API_KEY etc. never leave this machine.
@@ -79,7 +79,7 @@ for key in OPENAI_API_KEY TELEGRAM_BOT_TOKEN ADMIN_TELEGRAM_ID; do
   grep -q "^$key=." <<<"$BOT_ENV" || { echo "ERROR: $key is not set in .env" >&2; exit 1; }
 done
 printf '%s\n' "$BOT_ENV" \
-  | ssh "${SSH_OPTS[@]}" "root@$IP" 'umask 077; cat > /opt/ai_agents/bot.env; rm -f /opt/ai_agents/.env'
+  | ssh "${SSH_OPTS[@]}" "root@$IP" 'umask 077; cat > /opt/maxi_bot/bot.env; rm -f /opt/maxi_bot/.env'
 
 echo "==> uploading miniapp.env and funnel.env"
 # The public Mini App gets only a key derived from the bot token (it cannot act as the bot), and the
@@ -87,26 +87,26 @@ echo "==> uploading miniapp.env and funnel.env"
 MINIAPP_INIT_SECRET="$(printf %s "$(env_value TELEGRAM_BOT_TOKEN)" \
   | python3 -c 'import hashlib, hmac, sys; print(hmac.new(b"WebAppData", sys.stdin.buffer.read(), hashlib.sha256).hexdigest())')"
 { grep -E '^(ADMIN_TELEGRAM_ID|LOG_LEVEL)=' "$REPO_ROOT/.env" || true; printf 'MINIAPP_INIT_SECRET=%s\n' "$MINIAPP_INIT_SECRET"; } \
-  | ssh "${SSH_OPTS[@]}" "root@$IP" 'umask 077; cat > /opt/ai_agents/miniapp.env'
+  | ssh "${SSH_OPTS[@]}" "root@$IP" 'umask 077; cat > /opt/maxi_bot/miniapp.env'
 printf 'TS_AUTHKEY=%s\n' "$TS_AUTHKEY" \
-  | ssh "${SSH_OPTS[@]}" "root@$IP" 'umask 077; cat > /opt/ai_agents/funnel.env'
+  | ssh "${SSH_OPTS[@]}" "root@$IP" 'umask 077; cat > /opt/maxi_bot/funnel.env'
 
 echo "==> building and starting services"
 # The containers run as uid $APP_UID, so the sqlite volume must belong to it. The
 # chown is idempotent and only matters the first time after the non-root switch.
-# ai_agents:previous moves only when the layers changed (the image id changes on every build);
+# maxi_bot:previous moves only when the layers changed (the image id changes on every build);
 # the old image needs a tag of its own to survive the build.
 ssh "${SSH_OPTS[@]}" "root@$IP" "
   set -e
-  docker tag ai_agents:latest ai_agents:before-build 2>/dev/null || true
+  docker tag maxi_bot:latest maxi_bot:before-build 2>/dev/null || true
   $COMPOSE build --pull
   layers() { docker image inspect -f '{{json .RootFS.Layers}}' \"\$1\" 2>/dev/null || true; }
-  if [ -n \"\$(layers ai_agents:before-build)\" ] \
-     && [ \"\$(layers ai_agents:before-build)\" != \"\$(layers ai_agents:latest)\" ]; then
-    docker tag ai_agents:before-build ai_agents:previous
+  if [ -n \"\$(layers maxi_bot:before-build)\" ] \
+     && [ \"\$(layers maxi_bot:before-build)\" != \"\$(layers maxi_bot:latest)\" ]; then
+    docker tag maxi_bot:before-build maxi_bot:previous
   fi
-  docker rmi ai_agents:before-build >/dev/null 2>&1 || true
-  docker run --rm --user 0 -v docker_appdata:/data ai_agents:latest \
+  docker rmi maxi_bot:before-build >/dev/null 2>&1 || true
+  docker run --rm --user 0 -v docker_appdata:/data maxi_bot:latest \
     chown -R $APP_UID:$APP_UID /data
   $COMPOSE up -d --remove-orphans
   docker image prune -f

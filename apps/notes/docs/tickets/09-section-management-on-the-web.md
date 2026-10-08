@@ -1,6 +1,6 @@
 # 09 — Section management in the Mini App
 
-**What to build:** A «Секции» tab where the Owner creates, renames, recolours, re-emojis, reorders, re-hints and deletes Sections (ai_agents ADR-016; the SSH web UI this ticket was written for is gone). Other cannot be deleted. Deleting a Section drops it from its Items and re-homes any Item left without Sections to Other. A new Section shows up at once in the filter chips and in the item view, and in what the Classifier is told on the next Capture.
+**What to build:** A «Секции» tab where the Owner creates, renames, recolours, re-emojis, reorders, re-hints and deletes Sections (maxi-bot ADR-016; the SSH web UI this ticket was written for is gone). Other cannot be deleted. Deleting a Section drops it from its Items and re-homes any Item left without Sections to Other. A new Section shows up at once in the filter chips and in the item view, and in what the Classifier is told on the next Capture.
 
 **Blocked by:** 08 — Sorting pass in the Mini App, 11 — Mini App walking skeleton
 

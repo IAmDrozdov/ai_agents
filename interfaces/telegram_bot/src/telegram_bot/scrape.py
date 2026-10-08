@@ -24,7 +24,7 @@ _ALLOWED_SCHEMES = {"http", "https"}
 _REDIRECT_CODES = {301, 302, 303, 307, 308}
 _MAX_REDIRECTS = 2
 _PROBE_TIMEOUT_S = 10
-_USER_AGENT = "ai-agents-bot/1.0"
+_USER_AGENT = "maxi-bot-bot/1.0"
 
 
 class ScrapeError(Exception):

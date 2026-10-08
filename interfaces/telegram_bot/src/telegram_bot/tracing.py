@@ -11,7 +11,7 @@ log = get_logger(__name__)
 _PROVIDER_INITIALIZED = False
 
 
-def init_tracing(settings: Settings, service_name: str = "ai-agents-telegram") -> bool:
+def init_tracing(settings: Settings, service_name: str = "maxi-bot-telegram") -> bool:
     """Initialize the global tracer provider once per process."""
 
     global _PROVIDER_INITIALIZED

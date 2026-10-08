@@ -1,4 +1,4 @@
-# ai_agents
+# maxi-bot
 
 Turn long documents and YouTube videos into translations and voice-overs from a
 private Telegram bot that shows the price before it spends anything.
@@ -29,7 +29,7 @@ by a per-job cap and a per-user daily cap.
 ## Quick start (terminal)
 
 ```bash
-git clone <this repo> ai_agents && cd ai_agents
+git clone <this repo> maxi-bot && cd maxi-bot
 uv sync --all-packages
 cp .env.example .env            # fill OPENAI_API_KEY at minimum
 uv run smoke doc_translator README.md

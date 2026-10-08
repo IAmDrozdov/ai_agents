@@ -19,13 +19,13 @@ x-hardening: &hardening
 services:
   bot:
     <<: *hardening
-    image: ai_agents:latest
+    image: maxi_bot:latest
     build:
       context: ../..
       dockerfile: infrastructure/docker/Dockerfile
     command: telegram-bot
     # Allow-listed keys written by deploy.sh; nothing else from the host reaches a container.
-    env_file: /opt/ai_agents/bot.env
+    env_file: /opt/maxi_bot/bot.env
     # A runaway parse OOM-kills (and restarts) this container instead of thrashing the host.
     mem_limit: 700m
     memswap_limit: 900m
@@ -44,9 +44,9 @@ services:
   # for deploy.sh's health check; the funnel sidecar reaches it over the compose network.
   miniapp:
     <<: *hardening
-    image: ai_agents:latest
+    image: maxi_bot:latest
     command: telegram-miniapp --host 0.0.0.0 --port 8083
-    env_file: /opt/ai_agents/miniapp.env
+    env_file: /opt/maxi_bot/miniapp.env
     mem_limit: 160m
     memswap_limit: 160m
     environment:
@@ -66,11 +66,11 @@ services:
     <<: *hardening
     profiles: ["funnel"]
     image: tailscale/tailscale:v1.102.5
-    env_file: /opt/ai_agents/funnel.env
+    env_file: /opt/maxi_bot/funnel.env
     mem_limit: 96m
     memswap_limit: 96m
     environment:
-      TS_HOSTNAME: ai-agents
+      TS_HOSTNAME: maxi-bot
       TS_STATE_DIR: /var/lib/tailscale
       TS_USERSPACE: "true"
       TS_AUTH_ONCE: "true"
@@ -90,7 +90,7 @@ services:
   warp:
     <<: *hardening
     profiles: ["warp"]
-    image: ai_agents_warp:latest
+    image: maxi_bot_warp:latest
     build:
       context: warp
     environment:

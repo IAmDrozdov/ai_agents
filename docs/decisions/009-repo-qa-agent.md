@@ -17,7 +17,7 @@ Redacted 2026-09-13: employer and repository names removed for public release.
    `cache_control` block: the prefix is re-read on every tool cycle, so prompt
    caching is the dominant cost lever.
 3. The repos (three private clones) live on the droplet at
-   `/opt/ai_agents/repos`, cloned over HTTPS with a **fine-grained read-only
+   `/opt/maxi_bot/repos`, cloned over HTTPS with a **fine-grained read-only
    PAT** (deploy keys rejected: GitHub binds one key to one repo) and updated by
    a **host cron every 5 minutes** (`infrastructure/setup_repos.sh`). Webhooks
    rejected: the droplet firewall is SSH-only (ADR-008) and local git hooks

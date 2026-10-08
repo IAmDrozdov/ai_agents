@@ -28,7 +28,7 @@ needs public HTTPS.
    container cannot act as the bot. There is no TrustedHost check: DNS rebinding cannot forge a
    signature, and a proxy-rewritten Host header would only break the app.
 4. **Ingress.** A `funnel` sidecar (compose profile `funnel`, the `tailscale/tailscale` image
-   in userspace mode) publishes `miniapp` at `https://ai-agents.<tailnet>.ts.net` through
+   in userspace mode) publishes `miniapp` at `https://maxi-bot.<tailnet>.ts.net` through
    Tailscale Funnel. It connects outbound only, so the firewall stays SSH-only.
    `BOT_MINIAPP_URL` may point at any other HTTPS reverse proxy of `127.0.0.1:8083`.
 5. **Entry points.** The admin's chat gets a per-chat menu button `📒`, set at bot

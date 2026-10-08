@@ -121,7 +121,7 @@ dp.update.outer_middleware(AccessMiddleware()); setup_routers(dp)
 ```bash
 ./infrastructure/droplet.sh status 10m   # containers Up, healthz ok, 0 errors since the deploy (tracebacks, ERROR, notes disabled)
 G=./infrastructure/ssh-gate.sh   # SSH is closed by default; the gate opens it for one command (ADR-017)
-C="docker compose -f /opt/ai_agents/src/infrastructure/docker/docker-compose.yml"
+C="docker compose -f /opt/maxi_bot/src/infrastructure/docker/docker-compose.yml"
 $G ssh "$C exec -T bot notes-smoke https://youtu.be/dQw4w9WgXcQ"
 ```
 
@@ -135,8 +135,8 @@ $G ssh "$C exec -T bot notes-smoke https://youtu.be/dQw4w9WgXcQ"
   every start (`notes: thumbnail backfill {'made': …}` in its log). `$C exec -T bot notes-thumbs`
   runs the same pass by hand.
 - **Rollback point:** a deploy that changes the image tags the one that was running as
-  `ai_agents:previous`. To roll back, run `docker tag ai_agents:previous ai_agents:latest && $C up -d` on the droplet. Tag a
-  manual `ai_agents:rollback-<n>` only to keep a point across more than one deploy, and take a
+  `maxi_bot:previous`. To roll back, run `docker tag maxi_bot:previous maxi_bot:latest && $C up -d` on the droplet. Tag a
+  manual `maxi_bot:rollback-<n>` only to keep a point across more than one deploy, and take a
   Backup before a schema change (`SSH_KEY=… uv run python infrastructure/backup.py run --force`,
   ADR-018).
 

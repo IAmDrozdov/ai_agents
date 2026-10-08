@@ -30,8 +30,8 @@ root-owned `-wal`/`-shm` files that lock the bot's `app` user out.
    `getFile`, using the bot token from `.env`. `getFile` does not conflict with the bot's polling.
    Files over Telegram's 20 MB download limit are listed as `too_big`, not fetched. A file is named
    by Item id plus a hash of its `file_id`, because restoring an older Backup hands out old ids again.
-5. **Location.** iCloud Drive `Backups/ai-agents/`: one folder per local date, plus one shared
-   `files/` folder (`AI_AGENTS_BACKUP_DIR` overrides the location). There is no encryption in the
+5. **Location.** iCloud Drive `Backups/maxi-bot/`: one folder per local date, plus one shared
+   `files/` folder (`MAXI_BOT_BACKUP_DIR` overrides the location). There is no encryption in the
    script. Apple's Advanced Data Protection covers iCloud Drive, and a Backup stays a plain sqlite
    file that opens without a key.
 6. **Retention.** The newest 30 day folders. A file stays while a kept manifest lists its Item, so

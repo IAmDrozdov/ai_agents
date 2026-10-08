@@ -38,7 +38,7 @@ class Settings(BaseSettings):
 
     log_level: str = "INFO"
     otel_enabled: bool = False
-    otel_service_namespace: str = "ai_agents"
+    otel_service_namespace: str = "maxi_bot"
     otel_deployment_environment: str = "local"
     otel_exporter_otlp_endpoint: str = "http://localhost:8200"
     otel_exporter_otlp_headers: str | None = None

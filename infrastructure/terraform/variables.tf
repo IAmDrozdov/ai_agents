@@ -25,7 +25,7 @@ variable "ssh_allowed_cidrs" {
 variable "droplet_name" {
   description = "Droplet (and firewall) name"
   type        = string
-  default     = "ai-agents"
+  default     = "maxi-bot"
 }
 
 variable "ssh_key_name" {

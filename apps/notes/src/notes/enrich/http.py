@@ -14,7 +14,7 @@ from notes.enrich.guard import assert_fetchable
 
 __all__ = ["AiohttpClient", "FetchError", "HttpClient"]
 
-USER_AGENT = "ai-agents-notes/1.0 (+https://github.com/IAmDrozdov/ai_agents)"
+USER_AGENT = "maxi-bot-notes/1.0 (+https://github.com/IAmDrozdov/maxi-bot)"
 TIMEOUT_S = 10
 MAX_REDIRECTS = 3
 MAX_BODY_BYTES = 2_000_000

@@ -5,7 +5,7 @@
 set -euo pipefail
 
 GATE="$(cd "$(dirname "$0")" && pwd)/ssh-gate.sh"
-COMPOSE="docker compose -f /opt/ai_agents/src/infrastructure/docker/docker-compose.yml"
+COMPOSE="docker compose -f /opt/maxi_bot/src/infrastructure/docker/docker-compose.yml"
 # Telegram bot tokens, OpenAI keys, Tailscale auth keys and 64-hex secrets (HMAC keys, initData hashes).
 REDACT="sed -E 's/[0-9]{8,10}:[A-Za-z0-9_-]{30,}/<TG_TOKEN>/g; s/sk-[A-Za-z0-9_-]{20,}/<OPENAI_KEY>/g; s/tskey-[A-Za-z0-9-]+/<TS_KEY>/g; s/[0-9a-f]{64}/<HEX64>/g'"
 

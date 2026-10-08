@@ -30,16 +30,16 @@ from typing import Any
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SNAPSHOT_PROGRAM = REPO_ROOT / "infrastructure" / "backup_snapshot.py"
 GATE = REPO_ROOT / "infrastructure" / "ssh-gate.sh"
-COMPOSE = "docker compose -f /opt/ai_agents/src/infrastructure/docker/docker-compose.yml"
+COMPOSE = "docker compose -f /opt/maxi_bot/src/infrastructure/docker/docker-compose.yml"
 DATABASES = ("notes.sqlite3", "telegram_bot.sqlite3")
 
 HOME = Path.home()
 ICLOUD_DRIVE = HOME / "Library/Mobile Documents/com~apple~CloudDocs"
-DEFAULT_BACKUP_DIR = ICLOUD_DRIVE / "Backups/ai-agents"
-STAGING_ROOT = HOME / "Library/Caches/ai-agents-backup"
-STATE_DIR = HOME / "Library/Application Support/ai-agents-backup"
-LOG_PATH = HOME / "Library/Logs/ai-agents-backup.log"
-LABEL = "local.ai-agents.backup"
+DEFAULT_BACKUP_DIR = ICLOUD_DRIVE / "Backups/maxi-bot"
+STAGING_ROOT = HOME / "Library/Caches/maxi-bot-backup"
+STATE_DIR = HOME / "Library/Application Support/maxi-bot-backup"
+LOG_PATH = HOME / "Library/Logs/maxi-bot-backup.log"
+LABEL = "local.maxi-bot.backup"
 PLIST_PATH = HOME / "Library/LaunchAgents" / f"{LABEL}.plist"
 
 KEEP_DAYS = 30
@@ -208,7 +208,7 @@ class Alerts:
 
 def banner(text: str) -> None:
     script = (
-        'on run argv\ndisplay notification (item 1 of argv) with title "ai_agents backup"\nend run'
+        'on run argv\ndisplay notification (item 1 of argv) with title "maxi-bot backup"\nend run'
     )
     try:
         subprocess.run(
@@ -493,17 +493,17 @@ def report_failure(alerts: Alerts, reason: str) -> None:
         log.info("first failure in a row; the next run alerts if it fails too")
         return
     since = f" (last good Backup {last[:16].replace('T', ' ')})" if last else ""
-    alerts.send(f"failed: {reason}", f"⚠️ ai_agents backup failed: {reason}{since}")
+    alerts.send(f"failed: {reason}", f"⚠️ maxi-bot backup failed: {reason}{since}")
 
 
 def run(source: str, force: bool) -> int:
     env = read_env("TELEGRAM_BOT_TOKEN", "ADMIN_TELEGRAM_ID")
     token = env.get("TELEGRAM_BOT_TOKEN")
     setup_logging(token)
-    override = os.environ.get("AI_AGENTS_BACKUP_DIR")
+    override = os.environ.get("MAXI_BOT_BACKUP_DIR")
     if source == "local" and not override:
         log.error(
-            "--source local needs AI_AGENTS_BACKUP_DIR (a scratch dir), never the real Backups"
+            "--source local needs MAXI_BOT_BACKUP_DIR (a scratch dir), never the real Backups"
         )
         return 2
     backup_dir = Path(override).expanduser() if override else DEFAULT_BACKUP_DIR
@@ -553,7 +553,7 @@ def run(source: str, force: bool) -> int:
         if failed:
             alerts.send(
                 "warning",
-                f"⚠️ ai_agents backup: {len(failed)} file(s) could not be fetched, see {today}/manifest.json",
+                f"⚠️ maxi-bot backup: {len(failed)} file(s) could not be fetched, see {today}/manifest.json",
             )
         try:
             prune(backup_dir)
@@ -571,7 +571,7 @@ def install() -> int:
     dirs = [str(Path(p).parent) for p in tools.values() if p]
     path = ":".join(dict.fromkeys([*dirs, "/usr/bin", "/bin", "/usr/sbin", "/sbin"]))
     env = {"PATH": path}
-    for key in ("SSH_KEY", "AI_AGENTS_BACKUP_DIR"):
+    for key in ("SSH_KEY", "MAXI_BOT_BACKUP_DIR"):
         if os.environ.get(key):
             env[key] = str(Path(os.environ[key]).expanduser())
     if "SSH_KEY" not in env:
@@ -618,7 +618,7 @@ def main() -> int:
         "--source",
         choices=("droplet", "local"),
         default="droplet",
-        help="local: the local databases into AI_AGENTS_BACKUP_DIR, no bot messages",
+        help="local: the local databases into MAXI_BOT_BACKUP_DIR, no bot messages",
     )
     sub.add_parser("install", help="run hourly and at login through launchd")
     sub.add_parser("uninstall", help="remove the launchd agent")

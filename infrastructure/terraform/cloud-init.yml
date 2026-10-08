@@ -57,4 +57,4 @@ runcmd:
   - mkswap /swapfile
   - swapon /swapfile
   - echo '/swapfile none swap sw 0 0' >> /etc/fstab
-  - mkdir -p /opt/ai_agents/src
+  - mkdir -p /opt/maxi_bot/src

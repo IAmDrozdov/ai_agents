@@ -1,5 +1,5 @@
 [project]
-name = "ai-agents"
+name = "maxi-bot"
 version = "0.0.0"
 description = "Document translation, text-to-speech and YouTube dubbing workflows behind a private Telegram bot"
 readme = "README.md"
@@ -7,7 +7,7 @@ license = "MIT"
 requires-python = ">=3.12"
 
 [project.urls]
-Repository = "https://github.com/IAmDrozdov/ai_agents"
+Repository = "https://github.com/IAmDrozdov/maxi-bot"
 
 [tool.uv.workspace]
 members = ["shared", "workflows/*", "apps/*", "interfaces/*"]

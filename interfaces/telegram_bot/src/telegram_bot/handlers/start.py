@@ -17,7 +17,7 @@ log = get_logger(__name__)
 router = Router(name="start")
 
 HELP_TEXT = (
-    "🤖 <b>AI Agents bot</b>\n\n"
+    "🤖 <b>Maxi bot</b>\n\n"
     "Send me a document (<code>.pdf</code>, <code>.docx</code>, <code>.md</code>, "
     "<code>.txt</code>, up to 20 MB) <b>or paste a link</b> (e.g. a blog "
     "article — I extract the readable text) and pick an agent:\n"
