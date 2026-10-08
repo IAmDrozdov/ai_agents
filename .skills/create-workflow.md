@@ -34,7 +34,7 @@ workflows/<name>/
 name = "<name>"
 version = "0.0.0"
 requires-python = ">=3.12"
-dependencies = ["shared", "langchain>=0.3", "langchain-core>=0.3"]
+dependencies = ["shared", "langchain-core>=0.3"]  # plus the provider SDKs the stages call, e.g. "openai>=1.0"
 # add "langgraph>=0.2" only if framework=langgraph
 
 [tool.uv.sources]
@@ -102,4 +102,4 @@ uv run pre-commit run --all-files
 Summarize:
 - files created/updated
 - exposure completed (smoke registry + bot registry entry)
-- remaining user fill-ins (business logic, provider integration, docs depth)
+- the behavior and provider integration implemented, or the facts still needed to finish them

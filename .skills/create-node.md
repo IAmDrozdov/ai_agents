@@ -40,7 +40,7 @@ def build_<node>_node(
         if state.get("error"):
             return dict(state)
         progress.phase("<node>", 1)
-        # ... business behavior; append any CostLine to state["cost_lines"] and Facts to state["facts"]
+        # business behavior from the node's stated purpose; append any CostLine to state["cost_lines"] and Facts to state["facts"]
         return {**state}
 
     return RunnableLambda(_run, name="<node>")
@@ -82,4 +82,4 @@ Summarize:
 - created node file
 - export updates
 - graph wiring status
-- remaining TODOs for node internals and docs
+- the behavior implemented, or the question you need answered to implement it

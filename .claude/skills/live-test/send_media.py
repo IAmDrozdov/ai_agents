@@ -13,6 +13,7 @@ import tempfile
 from pathlib import Path
 
 from aiogram import Bot
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import FSInputFile
 
 from shared.audio import SpeechSpec, synthesize
@@ -56,9 +57,17 @@ async def _run(args: argparse.Namespace) -> None:
             elif args.command == "file":
                 sent = await bot.send_document(chat, FSInputFile(args.path), caption=args.caption)
             else:
-                for message_id in args.ids:
-                    ok = await bot.delete_message(chat, message_id)
-                    print(f"deleted {message_id}: {ok}")
+                ids = list(args.ids)
+                if args.from_file:
+                    lines = args.from_file.read_text().splitlines()
+                    ids += [int(x.split()[0]) for x in lines if x.strip() and not x.startswith("#")]
+                if not ids:
+                    raise SystemExit("no message ids: pass them or --from a file")
+                for message_id in dict.fromkeys(ids):
+                    try:
+                        print(f"deleted {message_id}: {await bot.delete_message(chat, message_id)}")
+                    except TelegramBadRequest as e:
+                        print(f"not deleted {message_id}: {e.message}")
                 return
             print(f"message_id={sent.message_id}")
     finally:
@@ -79,7 +88,10 @@ def main() -> None:
     p = sub.add_parser(
         "delete", help="delete messages in the admin chat (bot's or admin's, < 48 h)"
     )
-    p.add_argument("ids", type=int, nargs="+")
+    p.add_argument("ids", type=int, nargs="*")
+    p.add_argument(
+        "--from", dest="from_file", type=Path, help="a file of Bot API message ids, one per line"
+    )
     asyncio.run(_run(parser.parse_args()))
 
 

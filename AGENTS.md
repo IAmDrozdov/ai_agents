@@ -5,14 +5,12 @@ Map. Follow links. No rule duplication here. Humans start at `README.md`.
 ## What this is
 Monorepo of local AI workflows exposed through one job contract (`shared.job`, ADR-012) by a private Telegram bot and a terminal smoke runner, plus one stateful app — `apps/notes`, the admin's save-for-later store (ADR-015). New interfaces are thin adapters holding a registry of workflow descriptors. No automated tests (ADR-001).
 
-## Read first
-1. `docs/runtime.md` — what runs, what each part does, how they talk, in-memory state, touch points; before any bot, notes or deploy work
-2. `docs/architecture.md` — layers, deps, interface exposure flow
-3. `docs/conventions.md` — naming, layout, configs, business-doc conventions
-4. `docs/decisions/` — ADRs. Read all.
-5. `docs/tooling.md` — uv, ruff, ty, pre-commit, layer checker, grype
-6. `docs/approaches-skills-rules-map.md` — approach -> skill -> binding rules
-7. `docs/verifying.md` — how to prove a change works with no tests: smoke, the offline bot harness, free production checks
+## Docs, read by task
+- Any bot, notes or deploy work: `docs/runtime.md` first (what runs, how the parts talk, in-memory state, touch points).
+- Layers, deps, interface exposure: `docs/architecture.md`. Naming, layout, configs, business docs: `docs/conventions.md`.
+- uv, ruff, ty, pre-commit, layer checker, grype: `docs/tooling.md`. Approach -> skill -> binding rules: `docs/approaches-skills-rules-map.md`.
+- Proving a change works with no tests (smoke, the offline bot harness, free production checks): `docs/verifying.md`.
+- ADRs in `docs/decisions/` are binding: read every ADR that touches the area you change (a superseded one says so in its Status line). ADR-001 (no automated tests) and ADR-017 (SSH closed by default) apply everywhere.
 
 ## Common tasks
 - New workflow -> `.skills/create-workflow.md`
@@ -23,6 +21,7 @@ Monorepo of local AI workflows exposed through one job contract (`shared.job`, A
 - Domain terms -> `CONTEXT.md`
 - New ADR -> `docs/decisions/NNN-title.md`
 - Deploy bot to droplet -> `.claude/skills/deploy-bot/SKILL.md` (slash: `/deploy-bot`)
+- Inspect production (status, logs, read-only SQL; `py` runs a probe script) -> `infrastructure/droplet.sh` (through the SSH gate)
 - Backup / restore -> `infrastructure/README.md` "Backups", `docs/decisions/018-daily-backup-pulled-to-the-owners-mac.md`
 - Change the bot's routing, cards or buttons -> `docs/runtime.md` (routing table, card lifecycle), then `docs/verifying.md` §3
 - Live test in the real chat (last rung, owner-approved script) -> `.claude/skills/live-test/SKILL.md` (slash: `/live-test`)

@@ -26,46 +26,46 @@ Full infra docs: `infrastructure/README.md` (ADR-008); what each service does:
   ssh-agent / `~/.ssh/config`).
 - Droplet exists: `terraform -chdir=infrastructure/terraform output -raw droplet_ipv4`
   (if it errors, provision first per `infrastructure/README.md`).
-- NEVER run `uv run telegram-bot` locally while the droplet bot is up — two
-  pollers on one token fight over getUpdates (Telegram 409 Conflict).
+- Keep `uv run telegram-bot` off this machine while the droplet bot is up: two pollers on one
+  token fight over getUpdates (Telegram 409 Conflict).
 
 ## Steps
 
-1. **Gate** — run and require green before deploying:
-   ```bash
-   uv run pre-commit run --all-files
-   ```
-   (ruff fix+format, ty, layer checker, secrets scan. Fix violations; never deploy red.)
-   Run `git status` too: `deploy.sh` ships the working tree, so another session's uncommitted
-   work would go out with yours.
+0. **Before** — `./infrastructure/droplet.sh status` must show every container `Up` and `jobs
+   running: 0`: the restart kills an in-flight job (its row stays `running`). Before a
+   schema-affecting change, take a Backup (ADR-018):
+   `SSH_KEY=~/.ssh/<key> uv run python infrastructure/backup.py run --force`.
 
-2. **Deploy**:
-   ```bash
-   ./infrastructure/deploy.sh
-   ```
-   It starts with a preflight (secrets in the git history and in the files to ship, then
-   `grype`, which fails on High) and stops there on a finding; `SKIP_PREFLIGHT=1` is for an
-   emergency only. A code-only deploy takes about a minute and a no-change one about 20 s
-   without restarting anything; a changed `uv.lock` or Dockerfile takes 2–4 min (rsync +
-   on-droplet `docker compose build` + `up -d`). It waits for the bot
-   and the Mini App, then checks the public Mini App URL when Funnel is on (a warning, not a
-   failure: the first certificate can take minutes). A failed build stops before `up -d`, so the
-   old containers keep running.
-   If the on-droplet build OOMs or fails, use the buildx fallback in
-   `infrastructure/README.md`.
+1. **Gate** — green before deploying, as in `CLAUDE.md` "Validation before finishing": ruff fix and
+   format on the changed files, then pre-commit with its exit code checked (ruff, ty, layer checker,
+   secrets scan; never deploy red). Run `git status` too: `deploy.sh` ships the working
+   tree, so another session's uncommitted work would go out with yours.
 
-3. **Verify** (all through the SSH gate):
+2. **Deploy** — one blocking call that keeps the full log in a file and prints only the step lines:
    ```bash
-   G=./infrastructure/ssh-gate.sh
-   $G ssh 'docker ps --format "{{.Names}}: {{.Status}}"; docker logs docker-bot-1 2>&1 | tail -5; curl -s http://127.0.0.1:8083/healthz'
-   curl -s "$BOT_MINIAPP_URL/healthz"   # public, when Funnel is on
-   $G status                            # expect: closed
+   ./infrastructure/deploy.sh > .local/deploy.log 2>&1; echo "exit=$?"; grep -E '^(==>|OK|WARNING|ERROR|FAILED)' .local/deploy.log
    ```
-   Expected: all containers `Up`; bot log ends with
-   `polling as @<your-bot-username>` and `worker loop started`, with no tracebacks and no
-   `notes disabled`; healthz returns `{"status":"ok"}`. For regression checks that cost
-   nothing (agent previews in the new image, `notes-smoke`), see `docs/verifying.md` §4; the
-   real-chat check in Telegram Web is `docs/verifying.md` §5.
+   On a non-zero exit, the last `==>` line names the failing step: read the log's tail for a
+   preflight, sync or build failure, and `./infrastructure/droplet.sh logs` (secrets redacted) for a
+   container that did not come up. Edit nothing while it syncs: it ships the tree as it is.
+   It starts with a preflight (secrets in the git history and in the files to ship, then `grype`,
+   which fails on High) and stops there on a finding; `SKIP_PREFLIGHT=1` is for an emergency only.
+   A no-change deploy restarts nothing; a changed `uv.lock` or Dockerfile adds an on-droplet
+   `docker compose build`. It waits for the bot and the Mini App, then checks the public Mini App
+   URL when Funnel is on (a warning, not a failure: the first certificate can take minutes). A
+   failed build stops before `up -d`, so the old containers keep running. If the on-droplet build
+   OOMs or fails, use the buildx fallback in `infrastructure/README.md`.
+
+3. **Verify** in one gated call:
+   ```bash
+   ./infrastructure/droplet.sh status 10m   # containers, healthz, errors since the deploy, jobs running, last log lines, disk
+   ./infrastructure/ssh-gate.sh status      # expect: closed
+   ```
+   Expected: `deploy.sh` printed `OK: miniapp healthy and bot polling` (plus `OK: Mini App
+   reachable` with Funnel on); status shows every container `Up`, healthz `{"status":"ok"}` and 0
+   errors (tracebacks, ERROR lines, `notes disabled`). For regression checks that cost nothing
+   (agent previews in the new image, `notes-smoke`), see `docs/verifying.md` §4; the real-chat
+   check in Telegram Web is `docs/verifying.md` §5.
 
 4. **Report** — state what was deployed (branch/diff summary), the verification
    results, and the Mini App URL (`BOT_MINIAPP_URL`): the owner opens it with the 📒 button in
@@ -73,33 +73,5 @@ Full infra docs: `infrastructure/README.md` (ADR-008); what each service does:
 
 ## Rollback
 
-A deploy that changes the image tags the one that was running as `ai_agents:previous` (a re-run
-with no changes leaves it alone), so the fast rollback needs no rebuild:
-```bash
-./infrastructure/ssh-gate.sh ssh 'docker tag ai_agents:previous ai_agents:latest && docker compose -f /opt/ai_agents/src/infrastructure/docker/docker-compose.yml up -d'
-```
-`previous` moves on every deploy that changes the image. To keep a point across several deploys, tag it yourself
-(`docker tag ai_agents:latest ai_agents:rollback-<n>` on the droplet) and delete the tag when it is
-no longer needed. The droplet has no git history, so going further back means redeploying older
-code from your machine:
-```bash
-git stash            # or check out the last good commit
-./infrastructure/deploy.sh
-git stash pop
-```
-The sqlite volume (`/data/telegram_bot.sqlite3`, `/data/notes.sqlite3`) is untouched by
-deploys; users, settings, usage history and notes survive. Before a schema-affecting change,
-take a Backup (ADR-018; `infrastructure/README.md` "Backups"). Never copy the WAL files by hand:
-```bash
-SSH_KEY=~/.ssh/<key> uv run python infrastructure/backup.py run --force
-```
-
-## If a running job would be interrupted
-
-`docker compose up -d` restarts containers, killing any in-flight job (the job
-row stays `running` in the usage log). For a private ~1-user bot this is usually
-fine; if the user cares, check first:
-```bash
-./infrastructure/ssh-gate.sh ssh 'docker logs docker-bot-1 2>&1 | tail -3'
-```
-and deploy when no job is mid-run.
+[rollback.md](rollback.md): the fast `ai_agents:previous` rollback, going further back, and why the
+data survives a deploy.

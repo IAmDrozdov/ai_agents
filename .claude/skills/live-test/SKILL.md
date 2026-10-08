@@ -1,6 +1,6 @@
 ---
 name: live-test
-description: Live test of a change in the real Telegram chat (Telegram Web, owner's Chrome) — the last rung before a bot, notes or Mini App task is called done. Use when every lower rung of docs/verifying.md is green, or when the owner says "live test", "прогони вживую", "проверь в телеге".
+description: Live test of a change in the real Telegram chat (Telegram Web, owner's Chrome) — the last rung before a bot, notes or Mini App task is called done. Use when every lower rung of docs/verifying.md is green, when the owner says "live test", "прогони вживую", "проверь в телеге", or before driving Telegram Web or the deployed Mini App for any other reason.
 ---
 
 # Live test in the real chat
@@ -42,12 +42,13 @@ Show the owner the script (path and the case list). Stop. The run starts on the 
 
 ## 4. Run
 
-Deploy if the script says so (`/deploy-bot`). Then dispatch the run to a subagent
-(`general-purpose`, `model: sonnet`): pass it the script path and
-[telegram-web.md](telegram-web.md), and ask it to execute the cases in order, fill each case's
-`Факт` and `PASS/FAIL` with evidence (message text, snapshot excerpt, screenshot path under
-`.local/`), do every cleanup, and return the result table. The subagent follows the script
-literally: a case it cannot execute as written is `BLOCKED` with the reason, never improvised.
+Deploy if the script says so (`/deploy-bot`). Then dispatch the cases to the `live-test-runner`
+agent (`.claude/agents/live-test-runner.md`: Sonnet at medium effort, the fixed runner brief), at
+most three cases per runner, the next runner for the next group: a runner starts small, and every
+snapshot it reads stays in its context until it ends. Pass it the script path and its case
+numbers. Driving Telegram Web from this session instead carries this session's whole context into
+every browser step. Messages the cases leave behind go in one call:
+`uv run python .claude/skills/live-test/send_media.py delete --from .scratch/<feature>/ids.txt`.
 
 **Done when:** every case is PASS, FAIL or BLOCKED in the file, and cleanup is confirmed (Items
 total and Section counts back to the starting numbers).

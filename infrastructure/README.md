@@ -156,7 +156,15 @@ It only shows "open from Telegram" there: the API accepts nothing but signed ini
 
 ## Operations
 
+`droplet.sh` covers the routine checks in one gated call each, with short output and secrets
+redacted. `status`, `logs` and `sql` only read (`sql` refuses anything but SELECT); `py` runs any
+Python inside the bot container:
+
 ```bash
+./infrastructure/droplet.sh status [since]          # containers, healthz, errors since (default 60m), jobs running, last log lines, disk, memory
+./infrastructure/droplet.sh logs [service] [since]  # e.g. logs miniapp 30m (default: bot, 15m), last 60 lines
+./infrastructure/droplet.sh sql notes "SELECT ..."  # read-only query on notes or bot; at most 200 rows
+./infrastructure/droplet.sh py probe.py             # run a local Python file inside the bot container
 G=./infrastructure/ssh-gate.sh
 $G ssh 'docker compose -f /opt/ai_agents/src/infrastructure/docker/docker-compose.yml logs -f bot'
 ```

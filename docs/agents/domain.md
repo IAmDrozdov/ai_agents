@@ -23,7 +23,7 @@ Single-context repo with one app-scoped glossary:
 └── apps/notes/CONTEXT.md
 ```
 
-New ADRs: `docs/decisions/NNN-title.md`, numbered after the latest (next: 018).
+New ADRs: `docs/decisions/NNN-title.md`, numbered after the latest one in that directory.
 
 ## Use the glossary's vocabulary
 

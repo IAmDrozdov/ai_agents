@@ -24,6 +24,14 @@ NOTES_CLASSIFIER_PROVIDER=fake uv run notes-smoke <url>   # offline classifier, 
 
 The Mini App needs no bot token: `MINIAPP_INIT_SECRET` stands in for the derived key.
 
+`uv run python tools/miniapp_local.py up` does all of the below in one step: throwaway DBs under
+`.local/miniapp-local/` (seeded with 🧪 Items and Sections, or `--from-db-dir DIR` to copy
+`notes.sqlite3` and `telegram_bot.sqlite3`), a random key per run (never the real `.env` values),
+the server on `--port` (18083, 127.0.0.1 only) and the signed URL in `.local/miniapp_url.txt` (mode
+600). That URL carries a valid admin `initData`, so it is a credential for this run: open it, never
+paste or print it. It expires after 24 h (`auth_date`); run `up` again then. The API takes it as
+`Authorization: tma <initData>`. `down` stops the server and deletes the directory and the URL file.
+
 ```bash
 T=$(mktemp -d); SECRET=$(python3 -c 'import hashlib,hmac;print(hmac.new(b"WebAppData",b"42:TEST",hashlib.sha256).hexdigest())')
 ADMIN_TELEGRAM_ID=100 TELEGRAM_DB_PATH=$T/b.sqlite3 NOTES_DB_PATH=$T/n.sqlite3 MINIAPP_INIT_SECRET=$SECRET \
@@ -111,9 +119,9 @@ dp.update.outer_middleware(AccessMiddleware()); setup_routers(dp)
 ## 4. Production, after `deploy.sh` (free)
 
 ```bash
+./infrastructure/droplet.sh status 10m   # containers Up, healthz ok, 0 errors since the deploy (tracebacks, ERROR, notes disabled)
 G=./infrastructure/ssh-gate.sh   # SSH is closed by default; the gate opens it for one command (ADR-017)
 C="docker compose -f /opt/ai_agents/src/infrastructure/docker/docker-compose.yml"
-$G ssh "$C logs --since 10m bot | grep -ciE 'traceback|error|notes disabled'"   # expect 0
 $G ssh "$C exec -T bot notes-smoke https://youtu.be/dQw4w9WgXcQ"
 ```
 
