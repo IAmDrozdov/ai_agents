@@ -181,12 +181,6 @@ def list_sections(db: Database) -> list[Section]:
     return [_row_to_section(row) for row in rows]
 
 
-def get_section(db: Database, section_id: int) -> Section | None:
-    with db.session(readonly=True) as conn:
-        row = conn.execute("SELECT * FROM sections WHERE id=?", (section_id,)).fetchone()
-    return _row_to_section(row) if row else None
-
-
 def get_section_by_slug(db: Database, slug: str) -> Section | None:
     with db.session(readonly=True) as conn:
         row = conn.execute("SELECT * FROM sections WHERE slug=?", (slug,)).fetchone()
@@ -254,7 +248,7 @@ def create_section(
         if twin:
             raise SectionError(f"Название слишком похоже на секцию «{twin['name']}»")
         other = conn.execute("SELECT position FROM sections WHERE slug=?", (OTHER_SLUG,)).fetchone()
-        position = int(other["position"]) if other else 0
+        position = int(other["position"])
         conn.execute("UPDATE sections SET position = position + 1 WHERE position >= ?", (position,))
         try:
             cur = conn.execute(

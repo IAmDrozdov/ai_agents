@@ -36,7 +36,7 @@ product vocabulary.
 - **Estimate card** — the bot message listing priced actions for a pending source,
   with settings hints and an ETA per action.
 - **Smoke runner** — `interfaces/smoke`, the terminal adapter over the same contract
-  and the only verification surface (ADR-001).
+  and the workflow smoke surface (ADR-001; the other checks are in `docs/verifying.md`).
 - **Mini App** — the admin's Telegram Mini App (`telegram_bot/miniapp`, ADR-016): a static shell
   plus a JSON API over notes and usage, opened from the 📒 menu button. Every API call carries
   Telegram-signed **initData**, and only `ADMIN_TELEGRAM_ID` passes.

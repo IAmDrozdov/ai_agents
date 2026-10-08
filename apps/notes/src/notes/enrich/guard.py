@@ -4,24 +4,16 @@ from __future__ import annotations
 
 import ipaddress
 import socket
-from collections.abc import Callable
 from urllib.parse import urlsplit
 
 from notes.enrich.errors import FetchError
-
-Resolver = Callable[[str], list[str]]
 
 
 class UnsafeUrl(FetchError):
     """The link points somewhere this host must not fetch."""
 
 
-def _resolve(host: str) -> list[str]:
-    infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
-    return [str(info[4][0]) for info in infos]
-
-
-def assert_fetchable(url: str, *, resolve: Resolver = _resolve) -> None:
+def assert_fetchable(url: str) -> None:
     """Raise UnsafeUrl unless the link is http(s), well-formed and resolves to public addresses only."""
     parts = urlsplit(url)
     if parts.scheme.lower() not in ("http", "https"):
@@ -32,12 +24,13 @@ def assert_fetchable(url: str, *, resolve: Resolver = _resolve) -> None:
     if "@" in parts.netloc or "\\" in url:
         raise UnsafeUrl("the link is not in a supported form")
     try:
-        addresses = resolve(parts.hostname)
+        infos = socket.getaddrinfo(parts.hostname, None, proto=socket.IPPROTO_TCP)
     except OSError as exc:
         raise UnsafeUrl("the host does not resolve") from exc
-    if not addresses:
+    if not infos:
         raise UnsafeUrl("the host does not resolve")
-    for address in addresses:
+    for info in infos:
+        address = str(info[4][0])
         try:
             ip = ipaddress.ip_address(address)
         except ValueError as exc:

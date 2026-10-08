@@ -60,7 +60,7 @@ def build_request(
 
 async def load_image(http: HttpClient, image_url: str | None) -> tuple[bytes, str] | None:
     """The cover image for vision, best effort: a missing or unreadable one just means no picture."""
-    if not image_url or not image_url.lower().startswith(("http://", "https://")):
+    if not image_url:
         return None
     try:
         return await http.get_image(image_url)
@@ -97,8 +97,8 @@ async def enrich_item(
     *,
     http: HttpClient,
     classifier: Classifier,
-    notify: Notify | None,
-    download: Download | None = None,
+    notify: Notify,
+    download: Download,
     now: datetime | None = None,
 ) -> None:
     if item_id in _in_flight:
@@ -118,8 +118,8 @@ async def _enrich_item(
     *,
     http: HttpClient,
     classifier: Classifier,
-    notify: Notify | None,
-    download: Download | None,
+    notify: Notify,
+    download: Download,
     now: datetime | None,
 ) -> None:
     item = await asyncio.to_thread(items.get_item, db, item_id)
@@ -142,9 +142,6 @@ async def _enrich_item(
 
     transcript = item.transcript
     if item.kind == "voice" and transcript is None:
-        if download is None:
-            log.info("item %s: no download wired in, Voice left pending", item.id)
-            return
         try:
             transcript = await transcript_for(item, download)
             await asyncio.to_thread(items.store_transcript, db, item.id, transcript)
@@ -197,7 +194,7 @@ async def _enrich_item(
         return
     else:
         updated = await _store_async(db, item, fetched, filing, fetch_error, now, zone_name)
-    if updated is not None and notify is not None:
+    if updated is not None:
         await notify(updated, _filled_due(item, updated, filing, zone_name))
 
 
@@ -207,7 +204,7 @@ async def _record_failure(
     item_id: int,
     error: str,
     now: datetime | None,
-    notify: Notify | None,
+    notify: Notify,
 ) -> None:
     """Record a failure; once it is final, tell the interface so the Acknowledgement stops waiting."""
     try:
@@ -215,7 +212,7 @@ async def _record_failure(
     except KeyError:  # the Owner deleted it meanwhile
         log.info("item %s was deleted while it was being enriched", item_id)
         return
-    if updated.enrichment_status == "failed" and notify is not None:
+    if updated.enrichment_status == "failed":
         await notify(updated, False)
 
 
@@ -264,7 +261,7 @@ def _store(
         sections=result.sections,
         gist=result.gist or None,
         title=result.title or (fetched.title if fetched else None),
-        source=result.source or (fetched.source if fetched else None),
+        source=fetched.source if fetched else None,
         author=result.author or (fetched.author if fetched else None),
         caption=fetched.caption if fetched else None,
         image_url=fetched.image_url if fetched else None,

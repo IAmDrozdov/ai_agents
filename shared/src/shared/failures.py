@@ -166,10 +166,7 @@ def _from_status_code(code: int, message: str, api_code: str | None) -> Failure:
 
 def classify(exc: BaseException) -> Failure:
     """Turn an exception into a verdict. Pure — no network, safe to call anywhere."""
-    try:
-        import openai
-    except ImportError:  # pragma: no cover - openai is a hard dependency of shared
-        return Failure("internal", "Job failed", str(exc), "Needs a look at the logs.")
+    import openai
 
     if isinstance(exc, openai.APIStatusError):
         # Read the error object out of the body ourselves. `exc.code` is populated

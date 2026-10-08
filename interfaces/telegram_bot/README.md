@@ -105,16 +105,7 @@ Items (`apps/notes`, ADR-015). The routing table, card lifecycle and notes path 
 The admin's chat has a `📒` menu button while `BOT_MINIAPP_URL` is set. It opens the `miniapp` service
 (`miniapp/`): a static shell plus a JSON API.
 
-- `GET /` and `/static/*` — the shell; public, no data
-- `GET /healthz`
-- `GET /api/usage` — totals, per-user spend and job history
-- `GET /api/notes/dashboard` (`tz`: todo count and Items Captured / done per local day, 26 weeks)
-- `GET /api/notes/sections` (with `todo_count`), `GET /api/notes/items` (filters: section, status
-  `todo` by default, `day` + `day_field` captured|done + `tz`; paged), `GET /api/notes/items/{id}`
-- `PATCH /api/notes/items/{id}` (Sections, Status, text), `DELETE /api/notes/items/{id}`,
-  `POST /api/notes/items/{id}/reenrich`
-- `POST /api/notes/sections`, `PATCH /api/notes/sections/{id}`, `PUT /api/notes/sections/order`,
-  `DELETE /api/notes/sections/{id}` (Other is refused with 400)
+Routes: the "Admin Mini App" section of `docs/runtime.md`.
 
 Every `/api` call needs `Authorization: tma <initData>` (Telegram-signed, at most 24 h old, admin
 id only: 401 or 403 otherwise). The routes only parse and serialise; notes rules live in

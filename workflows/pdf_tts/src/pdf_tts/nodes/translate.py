@@ -35,7 +35,6 @@ def build_translate_node(
         return {
             **state,
             "text": merged,
-            "translated_text": merged,
             "chapters": result.chunks,
             "cost_lines": [*state.get("cost_lines", []), result.cost],
             "facts": [

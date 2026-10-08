@@ -40,12 +40,12 @@ def init_secret(token: str) -> str:
     return hmac.new(b"WebAppData", token.encode(), hashlib.sha256).hexdigest()
 
 
-def sign_init_data(secret: str, user_id: int = TEST_ADMIN_ID, age_s: int = 0) -> str:
+def sign_init_data(secret: str) -> str:
     """URL-encoded initData signed the way Telegram does; the key is the raw bytes of the hex secret."""
     fields = {
         "query_id": "AAHlocal",
-        "user": json.dumps({"id": user_id, "first_name": "Local"}, separators=(",", ":")),
-        "auth_date": str(int(time.time()) - age_s),
+        "user": json.dumps({"id": TEST_ADMIN_ID, "first_name": "Local"}, separators=(",", ":")),
+        "auth_date": str(int(time.time())),
         "signature": "bG9jYWwtc2lnbmF0dXJl",
     }
     check = "\n".join(f"{k}={fields[k]}" for k in sorted(fields))
@@ -265,13 +265,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="cmd", required=True)
     p_up = sub.add_parser("up", help="seed throwaway DBs, start the server, write the signed URL")
-    group = p_up.add_mutually_exclusive_group()
-    group.add_argument(
-        "--empty",
-        action="store_true",
-        help="seed 🧪 Items and Sections (the default; explicit form)",
-    )
-    group.add_argument(
+    p_up.add_argument(
         "--from-db-dir", metavar="DIR", help="copy notes.sqlite3 and telegram_bot.sqlite3 from DIR"
     )
     p_up.add_argument("--port", type=int, default=18083)

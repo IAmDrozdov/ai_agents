@@ -24,7 +24,7 @@ from shared.obs import get_logger
 from . import db, eta
 from .catalog import TG_UPLOAD_LIMIT
 from .progress import ProgressReporter
-from .registry import by_id
+from .registry import BY_ID
 from .user_config import config_snapshot
 
 log = get_logger(__name__)
@@ -132,18 +132,12 @@ class JobQueue:
         return total
 
 
-def _fmt_cost(value: Any) -> str:
-    try:
-        return f"${float(value):.4f}"
-    except (TypeError, ValueError):
-        return "—"
+def _fmt_cost(value: float) -> str:
+    return f"${value:.4f}"
 
 
 def _run_workflow(job: Job, reporter: ProgressReporter) -> Result:
-    entry = by_id(job.workflow_id)
-    if entry is None:
-        return Result.failed(f"unknown workflow {job.workflow_id!r}")
-    return entry.workflow.run(settings, job.config, job.preview, reporter)
+    return BY_ID[job.workflow_id].workflow.run(settings, job.config, job.preview, reporter)
 
 
 async def _send_audio_result(
@@ -258,14 +252,14 @@ def _format_failure(failure: Failure) -> str:
     lines = [
         f"❌ <b>Failed</b> — {html.escape(failure.headline)}",
         "",
-        _SCOPE_BADGE.get(failure.scope, failure.scope),
+        _SCOPE_BADGE[failure.scope],
         html.escape(failure.detail),
     ]
     if failure.health and (checked := failure.health.summary()):
         lines.append(f"<i>Checked: {html.escape(checked)}</i>")
     lines += [
         "",
-        f"{_VERDICT_ICON.get(failure.scope, '•')} <b>{html.escape(failure.verdict)}</b>",
+        f"{_VERDICT_ICON[failure.scope]} <b>{html.escape(failure.verdict)}</b>",
         html.escape(failure.action),
     ]
     return "\n".join(lines)

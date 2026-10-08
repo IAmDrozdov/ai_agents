@@ -5,12 +5,10 @@ from __future__ import annotations
 import asyncio
 import html
 import io
-import re
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import PurePosixPath
-from urllib.parse import urlparse
 
 import aiohttp
 from aiogram import Bot, F, Router
@@ -49,7 +47,7 @@ from ..keyboards import (
     root_menu,
     save_only_menu,
 )
-from ..registry import RegistryEntry, by_id, entries_for
+from ..registry import BY_ID, RegistryEntry, by_id, entries_for
 from ..scrape import ScrapeError, filename_for, scrape_url
 from ..worker import MAX_QUEUED_JOBS_PER_USER, Job, JobQueue
 
@@ -85,19 +83,6 @@ async def _run_intake(user_id: int, func, *args):
             loop.run_in_executor(_INTAKE_EXECUTOR, func, *args),
             timeout=_INTAKE_TIMEOUT_S,
         )
-
-
-_YOUTUBE_HOSTS = {
-    "youtube.com",
-    "www.youtube.com",
-    "m.youtube.com",
-    "music.youtube.com",
-    "youtu.be",
-}
-
-
-def _is_youtube_url(url: str) -> bool:
-    return urlparse(url).netloc.lower() in _YOUTUBE_HOSTS
 
 
 @dataclass
@@ -207,9 +192,8 @@ def _remember_draft(chat_id: int, message_id: int, draft: Draft) -> None:
         del drafts[next(iter(drafts))]
 
 
-def restore_draft(chat_id: int, message_id: int, draft: Draft) -> None:
-    """Give a Draft back to its card after a failed save, so 💾 can be tried again."""
-    _remember_draft(chat_id, message_id, draft)
+# Gives a Draft back to its card after a failed save, so 💾 can be tried again.
+restore_draft = _remember_draft
 
 
 def _pop_pending_for(message: Message) -> Pending | None:
@@ -221,17 +205,13 @@ def _pop_pending_for(message: Message) -> Pending | None:
     return item
 
 
-def take_draft(chat_id: int, message_id: int) -> Draft | None:
+def take_draft(card: Message) -> Draft | None:
     """Claim a card's Draft for saving; the card stops being a job."""
-    draft = drafts.pop((chat_id, message_id), None)
+    draft = drafts.pop((card.chat.id, card.message_id), None)
     if draft is None:
         return None
-    if _live.get(chat_id) == message_id:
-        del _live[chat_id]
-    _closed[(chat_id, message_id)] = None
-    item = pending.get(chat_id)
-    if item is not None and item.message_id == message_id:
-        del pending[chat_id]
+    _close(card)
+    _pop_pending_for(card)
     return draft
 
 
@@ -256,15 +236,10 @@ async def _fail_card(status: Message, text: str, savable: bool) -> None:
     await status.edit_text(text, reply_markup=save_only_menu() if savable else None)
 
 
-_URL_RE = re.compile(r"https?://[^\s<>]+")
-
-
 def _first_url(text: str | None) -> str | None:
-    """First http(s) URL in `text`, trailing sentence punctuation stripped."""
-    if not text:
-        return None
-    match = _URL_RE.search(text)
-    return match.group(0).rstrip(").,!?;'\"") if match else None
+    """First http(s) URL in `text`, read the way a Capture reads it."""
+    urls = extract_urls(text).urls if text else ()
+    return urls[0] if urls else None
 
 
 def _looks_like_link(message: Message) -> bool:
@@ -341,15 +316,11 @@ def _card_text(
     lines.append("")
 
     for opt in options:
-        entry = by_id(opt.workflow_id)
-        if entry is None:
-            continue
+        entry = BY_ID[opt.workflow_id]
         lines.append(f"<b>{html.escape(entry.label)}</b>")
         lines.append(f"• {_settings_hint(entry, effective)}")
     for workflow_id, err in errors.items():
-        entry = by_id(workflow_id)
-        label = entry.label if entry else workflow_id
-        lines.append(f"⚠️ {html.escape(label)} unavailable: {html.escape(err)}")
+        lines.append(f"⚠️ {html.escape(BY_ID[workflow_id].label)} unavailable: {html.escape(err)}")
     return "\n".join(lines)
 
 
@@ -359,9 +330,7 @@ def _action_options(
     options: list[ActionOption] = []
     errors: dict[str, str] = {}
     for workflow_id, estimate in item.estimates.items():
-        entry = by_id(workflow_id)
-        if entry is None:
-            continue
+        entry = BY_ID[workflow_id]
         if estimate.error:
             errors[workflow_id] = estimate.error
             continue
@@ -562,7 +531,7 @@ async def link_handler(message: Message) -> None:
 
 async def offer_link(message: Message, url: str, user_id: int, draft: Draft | None = None) -> None:
     """Price card for a link in `message`'s chat; with a Draft the card also offers 💾."""
-    if _is_youtube_url(url):
+    if is_youtube(url):
         await _begin_pending(message, LinkSource(url), user_id, "📡 Fetching video info…", draft)
         return
 
@@ -595,7 +564,7 @@ async def run_job_handler(callback: CallbackQuery, callback_data: JobCB, queue: 
     message = _accessible(callback)
     item = _pop_pending_for(message) if message else None
     workflow_id = callback_data.workflow
-    entry = by_id(workflow_id) if workflow_id else None
+    entry = by_id(workflow_id)
     if item is None or message is None or entry is None:
         await callback.answer("This job has expired — send the document again.", show_alert=True)
         return
@@ -660,7 +629,8 @@ async def run_job_handler(callback: CallbackQuery, callback_data: JobCB, queue: 
 @router.callback_query(JobCB.filter(F.action == "settings"))
 async def job_settings_handler(callback: CallbackQuery) -> None:
     message = _accessible(callback)
-    if message is None or message.chat.id not in pending:
+    item = pending.get(message.chat.id) if message else None
+    if item is None or message is None or item.message_id != message.message_id:
         await callback.answer("This job has expired — send the document again.", show_alert=True)
         return
     await callback.answer()

@@ -25,7 +25,7 @@ LLM_SDKS = {
 }
 
 # Apps hold domain and storage; transport stays in interfaces/* (ADR-015).
-APP_FORBIDDEN = {"workflows", "interfaces", "aiogram", "fastapi", "starlette", "uvicorn"}
+APP_FORBIDDEN = {"aiogram", "fastapi", "starlette", "uvicorn"}
 
 
 @dataclass
@@ -46,10 +46,7 @@ class Violation:
 
 
 def iter_imports(path: Path) -> list[str]:
-    try:
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-    except SyntaxError:
-        return []
+    tree = ast.parse(path.read_text(encoding="utf-8"))
     names: list[str] = []
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
@@ -63,18 +60,18 @@ def root_pkg(import_name: str) -> str:
     return import_name.split(".")[0]
 
 
-def _app_packages() -> set[str]:
-    apps = REPO_ROOT / "apps"
-    if not apps.exists():
-        return set()
-    return {pkg.name for pkg in apps.glob("*/src/*") if pkg.is_dir()}
+def _packages(top: str) -> set[str]:
+    """Importable package names of <top>/*/src/*."""
+    return {pkg.name for pkg in (REPO_ROOT / top).glob("*/src/*") if pkg.is_dir()}
 
 
-APP_PACKAGES = _app_packages()
+APP_PACKAGES = _packages("apps")
+WORKFLOW_PACKAGES = _packages("workflows")
+INTERFACE_PACKAGES = _packages("interfaces")
 
 
-def _app_package(parts: tuple[str, ...]) -> str | None:
-    """The importable package of an apps/<name>/src/<pkg>/... path."""
+def _src_package(parts: tuple[str, ...]) -> str | None:
+    """The importable package of a <top>/<name>/src/<pkg>/... path."""
     return parts[3] if len(parts) > 3 and parts[2] == "src" else None
 
 
@@ -98,11 +95,11 @@ def check_file(path: Path) -> list[Violation]:
                     path,
                     imp,
                     "interfaces/* must not import LLM SDKs",
-                    "move LLM logic into a workflow; interface should only call build_graph().invoke()",
+                    "move LLM logic into a workflow; interfaces call a workflow through its WORKFLOW descriptor (shared.job)",
                 )
             )
 
-        if in_apps and root in APP_FORBIDDEN:
+        if in_apps and root in APP_FORBIDDEN | WORKFLOW_PACKAGES | INTERFACE_PACKAGES:
             violations.append(
                 Violation(
                     path,
@@ -112,7 +109,7 @@ def check_file(path: Path) -> list[Violation]:
                 )
             )
 
-        if in_apps and root in APP_PACKAGES and root != _app_package(parts):
+        if in_apps and root in APP_PACKAGES and root != _src_package(parts):
             violations.append(
                 Violation(
                     path,
@@ -122,7 +119,7 @@ def check_file(path: Path) -> list[Violation]:
                 )
             )
 
-        if in_shared and root in {"workflows", "interfaces"} | APP_PACKAGES:
+        if in_shared and root in WORKFLOW_PACKAGES | INTERFACE_PACKAGES | APP_PACKAGES:
             violations.append(
                 Violation(
                     path,
@@ -132,18 +129,15 @@ def check_file(path: Path) -> list[Violation]:
                 )
             )
 
-        if in_workflows and root == "workflows":
-            this_workflow = parts[1]
-            other_workflow = imp.split(".")[1] if "." in imp else None
-            if other_workflow and other_workflow != this_workflow:
-                violations.append(
-                    Violation(
-                        path,
-                        imp,
-                        f"workflows/{this_workflow}/* must not import workflows/{other_workflow}/*",
-                        "extract the shared piece into shared/, or call the other workflow via its build_graph() through the interface layer",
-                    )
+        if in_workflows and root in WORKFLOW_PACKAGES and root != _src_package(parts):
+            violations.append(
+                Violation(
+                    path,
+                    imp,
+                    f"workflows/{parts[1]}/* must not import another workflow ({root})",
+                    "extract the shared piece into shared/, or compose the workflows in an interface via their WORKFLOW descriptors",
                 )
+            )
 
         if in_workflows and root in APP_PACKAGES:
             violations.append(
@@ -155,7 +149,7 @@ def check_file(path: Path) -> list[Violation]:
                 )
             )
 
-        if in_workflows and root == "interfaces":
+        if in_workflows and root in INTERFACE_PACKAGES:
             violations.append(
                 Violation(
                     path,
@@ -172,8 +166,6 @@ def main() -> int:
     py_files: list[Path] = []
     for top in ("interfaces", "shared", "workflows", "apps"):
         root = REPO_ROOT / top
-        if not root.exists():
-            continue
         py_files.extend(root.rglob("*.py"))
 
     all_violations: list[Violation] = []

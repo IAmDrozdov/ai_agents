@@ -126,9 +126,10 @@ $G ssh "$C exec -T bot notes-smoke https://youtu.be/dQw4w9WgXcQ"
 ```
 
 - **Agents:** preview and estimate every agent inside the new image. This is free and exercises
-  parsing, pricing and the YouTube route through `warp`:
-  `WORKFLOW.preview(settings, WORKFLOW.config_type(), source)`, then `WORKFLOW.estimate(...)`.
-  Run it via `$C exec -T bot python -`.
+  parsing, pricing and the YouTube route through `warp`. `smoke` prints both and `echo n` refuses
+  the paid prompt (so `smoke` itself exits 1); one gated call covers the three workflows and prints
+  each one's `Total` line, or its `preview failed`/`estimate failed` reason:
+  `$G ssh "$C exec -T bot sh -c 'echo Hello > /tmp/s.txt; for a in doc_translator:/tmp/s.txt pdf_tts:/tmp/s.txt yt_dub:https://youtu.be/dQw4w9WgXcQ; do printf %s: \${a%%:*}; echo n | smoke \${a%%:*} \${a#*:} 2>&1 | grep -E Total\|failed || echo no estimate; done'"`
 - **Mini App:** on the droplet (outside your tailnet, so it is the public path), `curl -fsS
   $BOT_MINIAPP_URL/healthz` must answer and `/api/usage` without a header must be 401.
   `docker stats --no-stream` should sit inside the memory caps. The bot gives Items without a Thumbnail one at

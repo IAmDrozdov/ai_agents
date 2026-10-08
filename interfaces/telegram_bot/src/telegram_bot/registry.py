@@ -66,16 +66,15 @@ REGISTRY: list[RegistryEntry] = [
     ),
 ]
 
-_BY_ID: dict[str, RegistryEntry] = {entry.id: entry for entry in REGISTRY}
+BY_ID: dict[str, RegistryEntry] = {entry.id: entry for entry in REGISTRY}
 
 
 def by_id(workflow_id: str) -> RegistryEntry | None:
-    return _BY_ID.get(workflow_id)
+    return BY_ID.get(workflow_id)
 
 
 def label_for(workflow_id: str) -> str:
-    entry = by_id(workflow_id)
-    return entry.label if entry else workflow_id
+    return BY_ID[workflow_id].label
 
 
 def entries_for(kind: SourceKind) -> list[RegistryEntry]:

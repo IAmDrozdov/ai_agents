@@ -74,7 +74,7 @@ def save(db: Database, item_id: int, image: bytes) -> bool:
 
 
 async def _cover(http: HttpClient, url: str | None) -> bytes | None:
-    if not url or not url.lower().startswith(("http://", "https://")):
+    if not url:
         return None
     try:
         return (await http.get_image(url))[0]

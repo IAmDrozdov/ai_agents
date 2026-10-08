@@ -60,9 +60,9 @@ def run(
     if preview.error:
         return Result.failed(preview.error)
     initial: DocTranslatorState = {
-        "filename": str(preview.payload.get("filename") or preview.title),
-        "text": str(preview.payload.get("text") or ""),
-        "chapters": cast(list[str], preview.payload.get("chapters") or []),
+        "filename": str(preview.payload["filename"]),
+        "text": str(preview.payload["text"]),
+        "chapters": cast(list[str], preview.payload["chapters"]),
         "cost_lines": [],
         "facts": [],
     }
@@ -73,7 +73,7 @@ def run(
     stem = PurePosixPath(initial["filename"]).stem
     return Result(
         deliverable=FileDeliverable(
-            data=(state.get("output_markdown") or "").encode("utf-8"),
+            data=state["translated_text"].encode("utf-8"),
             filename=f"{stem}.translated.md",
         ),
         cost=cost,

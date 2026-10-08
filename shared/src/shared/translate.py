@@ -68,7 +68,6 @@ class TranslateResult:
     duration_s: float
     input_tokens: int
     output_tokens: int
-    usage_estimated: bool
     cost: CostLine
 
 
@@ -127,7 +126,7 @@ def _translate_one(
     chunk: str,
     client: Any,
     spec: TranslateSpec,
-) -> tuple[int, str, int, int, bool]:
+) -> tuple[int, str, int, int]:
     prompt = system_prompt(spec)
     log.info("translate_chunks: chapter %d (%d chars)", idx + 1, len(chunk))
     expected_output_tokens = max(
@@ -155,17 +154,11 @@ def _translate_one(
         and usage.prompt_tokens is not None
         and usage.completion_tokens is not None
     ):
-        return (
-            idx,
-            content.strip(),
-            int(usage.prompt_tokens),
-            int(usage.completion_tokens),
-            False,
-        )
+        return idx, content.strip(), int(usage.prompt_tokens), int(usage.completion_tokens)
 
     input_tokens = estimate_tokens(prompt) + estimate_tokens(chunk)
     output_tokens = estimate_tokens(content)
-    return idx, content.strip(), input_tokens, output_tokens, True
+    return idx, content.strip(), input_tokens, output_tokens
 
 
 def translate_chunks(
@@ -176,14 +169,13 @@ def translate_chunks(
 ) -> TranslateResult:
     """Translate in parallel; on the first failure, cancel the rest and re-raise it."""
     if not chunks:
-        return TranslateResult([], 0.0, 0, 0, False, CostLine(COST_LABEL, 0.0))
+        return TranslateResult([], 0.0, 0, 0, CostLine(COST_LABEL, 0.0))
 
     client = build_openai_client(settings)
     total = len(chunks)
     results: list[str | None] = [None] * total
     input_tokens = 0
     output_tokens = 0
-    usage_estimated = False
     done_count = 0
     t0 = time.perf_counter()
 
@@ -200,9 +192,7 @@ def translate_chunks(
         }
         for future in as_completed(futures):
             try:
-                idx, translated, chunk_input_tokens, chunk_output_tokens, chunk_estimated = (
-                    future.result()
-                )
+                idx, translated, chunk_input_tokens, chunk_output_tokens = future.result()
             except Exception as exc:
                 if first_error is None:
                     first_error = exc
@@ -214,7 +204,6 @@ def translate_chunks(
             results[idx] = translated
             input_tokens += chunk_input_tokens
             output_tokens += chunk_output_tokens
-            usage_estimated = usage_estimated or chunk_estimated
             done_count += 1
             if on_progress:
                 on_progress(done_count, total)
@@ -243,6 +232,5 @@ def translate_chunks(
         duration_s=round(time.perf_counter() - t0, 3),
         input_tokens=input_tokens,
         output_tokens=output_tokens,
-        usage_estimated=usage_estimated,
         cost=CostLine(COST_LABEL, cost_usd(spec, input_tokens, output_tokens)),
     )

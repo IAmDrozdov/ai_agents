@@ -10,7 +10,6 @@ import {
   haptic,
   isHalted,
   keepSnapshot,
-  parseTs,
   pollDelay,
   reconcile,
   setText,
@@ -25,7 +24,6 @@ const PAGE = 30;
 const MAX_CHUNK = 100; // the most items the server returns in one request
 const SEARCH_DELAY_MS = 300;
 const STALE_AFTER_MS = 350;
-const RETRY_SLACK_MS = 5000; // after a scheduled Enrichment retry, before asking how it went
 const EDGE = 56; // a drag this close to the top or bottom of the screen scrolls the page
 const STATUSES = [
   ["todo", "Сделать"],
@@ -517,9 +515,7 @@ export async function mountNotes(root, ctx) {
       pollStep = 0;
       return;
     }
-    let delay = pollDelay(pollStep);
-    const retry = Math.min(...pending.map((item) => parseTs(item.next_enrich_at)?.getTime() ?? 0));
-    if (retry - Date.now() > delay) delay = Math.min(retry - Date.now() + RETRY_SLACK_MS, 2 ** 31 - 1);
+    const delay = pollDelay(pollStep, pending);
     const ids = [...new Set(pending.map((item) => item.id))].slice(0, MAX_CHUNK); // what the server takes at once
     pollTimer = setTimeout(() => pollPending(ids), delay);
   }
@@ -709,8 +705,5 @@ export async function mountNotes(root, ctx) {
     state.overlay?.close();
   }
 
-  editButton.textContent = "Изменить";
-  addButton.hidden = true;
-  notice.hidden = true;
   return { show, shown, hide };
 }

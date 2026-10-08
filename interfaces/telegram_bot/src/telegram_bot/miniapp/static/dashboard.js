@@ -11,13 +11,7 @@ const TOP = 12; // room for the month labels
 const WEEKDAYS = [[0, "Пн"], [2, "Ср"], [4, "Пт"]]; // prettier-ignore
 const EMPTY_HINT = "Пока пусто. Кинь боту ссылку или заметку.";
 
-const TIMEZONE = (() => {
-  try {
-    return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
-  } catch {
-    return "UTC";
-  }
-})();
+const TIMEZONE = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
 const parseDay = (iso) => {
   const [y, m, d] = iso.split("-").map(Number);
@@ -108,7 +102,6 @@ function buildDashboard(onSection, onOverdue) {
   const bodyOf = (box) => box.lastChild;
 
   function update(board, sections) {
-    if (!board) return;
     setText(headNumber, String(board.todo));
     overdueButton.hidden = !board.overdue;
     setText(overdueButton, `просрочено: ${board.overdue}`);

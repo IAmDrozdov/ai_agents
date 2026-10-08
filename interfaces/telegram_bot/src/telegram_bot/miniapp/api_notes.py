@@ -191,17 +191,6 @@ def get_item(item_id: int, db: DbDep) -> dict[str, Any]:
     return _item_json(_found(items.get_item(db, item_id)))
 
 
-@router.get("/items/{item_id}/preview")
-def get_item_preview(item_id: int, db: DbDep) -> Response:
-    preview = items.get_preview(db, item_id)
-    if preview is None:
-        raise HTTPException(status_code=404, detail="No preview")
-    data, mime = preview
-    return Response(
-        content=data, media_type=mime, headers={"Cache-Control": "private, max-age=3600"}
-    )
-
-
 @router.get("/items/{item_id}/thumb")
 def get_item_thumb(item_id: int, request: Request, db: DbDep) -> Response:
     """The card picture; its URL carries the etag (`?v=`), so the webview keeps it for good."""

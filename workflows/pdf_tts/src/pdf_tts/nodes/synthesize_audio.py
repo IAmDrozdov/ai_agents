@@ -31,7 +31,6 @@ def build_synthesize_audio_node(
             **state,
             "audio_bytes": result.audio_bytes,
             "audio_parts": result.audio_parts,
-            "audio_format": result.audio_format,
             "audio_duration_s": result.audio_duration_s,
             "cost_lines": [*state.get("cost_lines", []), result.cost],
             "facts": [

@@ -40,7 +40,7 @@ function relTime(ts) {
 function dailyCost(daily, count) {
   const now = new Date();
   const base = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
-  const spent = Object.fromEntries(daily.map((row) => [row.day, row.cost_usd || 0]));
+  const spent = Object.fromEntries(daily.map((row) => [row.day, row.cost_usd]));
   const days = [];
   for (let i = count - 1; i >= 0; i--) {
     const iso = new Date(base - i * 86400000).toISOString();
@@ -153,9 +153,9 @@ export async function mountUsage(root) {
 
   function buildKpis() {
     const t = data.totals;
-    const tokens = data.by_user.reduce((sum, u) => sum + (u.tokens || 0), 0);
+    const tokens = data.by_user.reduce((sum, u) => sum + u.tokens, 0);
     const cost = tile("Всего потрачено", "$" + (t.cost_usd || 0), `по дням, ${DAYS} дн.`, sparkline(dailyCost(data.daily, DAYS)));
-    const jobs = tile("Задачи", fmtInt(t.jobs || 0), `${t.ok_jobs || 0} ок · ${t.error_jobs || 0} с ошибкой`);
+    const jobs = tile("Задачи", fmtInt(t.jobs), `${t.ok_jobs || 0} ок · ${t.error_jobs || 0} с ошибкой`);
     const tok = tile("Токены", fmtInt(tokens), "перевод: вход + выход");
     const rate = t.jobs ? (100 * (t.error_jobs || 0)) / t.jobs : 0;
     errorTile = tile("Ошибки", rate.toFixed(1) + "%", "");
@@ -179,7 +179,7 @@ export async function mountUsage(root) {
     for (const u of data.by_user) {
       const row = el("button", "user-row");
       const jobs = `${fmtInt(u.jobs)} ${plural(u.jobs, "задача", "задачи", "задач")}`;
-      row.append(el("span", "user-name", userLabel(u)), el("span", "hint", `${jobs} · ${fmtInt(u.tokens)} ток.`), el("span", "user-cost", "$" + (u.cost_usd || 0).toFixed(4)));
+      row.append(el("span", "user-name", userLabel(u)), el("span", "hint", `${jobs} · ${fmtInt(u.tokens)} ток.`), el("span", "user-cost", "$" + u.cost_usd.toFixed(4)));
       row.onclick = () => {
         state.user = state.user === u.telegram_id ? null : u.telegram_id;
         syncFilters();

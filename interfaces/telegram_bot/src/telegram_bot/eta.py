@@ -6,7 +6,6 @@ LRU with no TTL; entries rebuild every ``REBUILD_EVERY`` finished jobs.
 
 from __future__ import annotations
 
-import json
 from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Any
@@ -14,7 +13,7 @@ from typing import Any
 from pydantic import BaseModel, ValidationError
 
 from . import db
-from .registry import REGISTRY, by_id
+from .registry import BY_ID
 
 REBUILD_EVERY = 4
 SAMPLE_LIMIT = 30
@@ -23,7 +22,6 @@ CACHE_SIZE = 32
 
 # Cold-start prior (sec/char). Tuned from droplet history; self-corrects after ~3 jobs.
 _PRIOR = 0.0035
-_PRIORS: dict[str, float] = {entry.id: _PRIOR for entry in REGISTRY}
 
 
 @dataclass(frozen=True)
@@ -59,12 +57,10 @@ def format_eta(seconds: float | None) -> str:
 
 def profile_key(workflow_id: str, config: Any) -> str:
     """Stable key so a slow model does not poison a fast one's rate."""
-    entry = by_id(workflow_id)
-    if entry is None:
-        return f"{workflow_id}|unknown"
+    entry = BY_ID[workflow_id]
     if not isinstance(config, BaseModel):
         try:
-            config = entry.workflow.config_type.model_validate(_as_dict(config))
+            config = entry.workflow.config_type.model_validate(config)
         except ValidationError:
             # Rows written before the config shape changed still feed the per-workflow rate.
             return f"{workflow_id}|unknown"
@@ -95,48 +91,21 @@ def _rate_for(key: str, workflow_id: str) -> float:
 
 def _compute_rate(key: str, workflow_id: str) -> float:
     samples = db.recent_job_samples(workflow_id, limit=SAMPLE_LIMIT)
-    exact = [s for s in samples if profile_key(workflow_id, s.get("config_json") or {}) == key]
+    exact = [s for s in samples if profile_key(workflow_id, s["config_json"] or {}) == key]
     rate = _median_rate(exact)
     if rate is not None:
         return rate
     agent_rate = _median_rate(samples)
     if agent_rate is not None:
         return agent_rate
-    return _PRIORS.get(workflow_id, _PRIOR)
+    return _PRIOR
 
 
 def _median_rate(samples: list[dict[str, Any]]) -> float | None:
-    rates: list[float] = []
-    for sample in samples:
-        chars = sample.get("char_count")
-        duration = sample.get("duration_s")
-        if not chars or not duration:
-            continue
-        try:
-            c = int(chars)
-            d = float(duration)
-        except (TypeError, ValueError):
-            continue
-        if c > 0 and d > 0:
-            rates.append(d / c)
-    if len(rates) < MIN_SAMPLES:
+    if len(samples) < MIN_SAMPLES:
         return None
-    rates.sort()
+    rates = sorted(s["duration_s"] / s["char_count"] for s in samples)
     mid = len(rates) // 2
     if len(rates) % 2:
         return rates[mid]
     return (rates[mid - 1] + rates[mid]) / 2
-
-
-def _as_dict(config: Any) -> dict[str, Any]:
-    if config is None:
-        return {}
-    if isinstance(config, dict):
-        return config
-    if isinstance(config, str):
-        try:
-            parsed = json.loads(config)
-            return parsed if isinstance(parsed, dict) else {}
-        except ValueError:
-            return {}
-    return {}

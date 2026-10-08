@@ -36,7 +36,7 @@ re-encoded and no ffmpeg is required. Cost: each chunk boundary keeps ~6.5 ms of
 pre-skip padding, which is inaudible in speech.
 
 State keys: `audio_bytes`, `audio_parts` (per-chunk blobs, for size-limited
-splitting downstream), `audio_format`, and `audio_duration_s` — the playable length
+splitting downstream), and `audio_duration_s` — the playable length
 in seconds, or `0.0` when unknown (only Opus is measured).
 
 ## Result

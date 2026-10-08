@@ -21,8 +21,8 @@ async def sweep_once(
     *,
     http: HttpClient,
     classifier: Classifier,
-    notify: Notify | None,
-    download: Download | None = None,
+    notify: Notify,
+    download: Download,
     now: datetime | None = None,
 ) -> int:
     """Enrich everything that is due; returns how many Items were picked up."""
@@ -50,7 +50,7 @@ async def run_sweeper(
     classifier: Classifier,
     notify: Notify,
     interval_s: int,
-    download: Download | None = None,
+    download: Download,
 ) -> None:
     while True:
         try:

@@ -156,9 +156,15 @@ function forgetSnapshots() {
   writeLocal(null); // a launch that fell back may have left a copy here too
 }
 
-// The pause before asking again about an Item still being enriched: quick at first, then every 30 s.
+// The pause before asking again about Items still being enriched: quick at first, then every 30 s,
+// but never before the earliest scheduled Enrichment retry is due.
 const POLL_STEPS_MS = [3000, 5000, 10000, 20000, 30000];
-export const pollDelay = (step) => POLL_STEPS_MS[Math.min(step, POLL_STEPS_MS.length - 1)];
+const RETRY_SLACK_MS = 5000; // after a scheduled Enrichment retry, before asking how it went
+export function pollDelay(step, pending) {
+  const delay = POLL_STEPS_MS[Math.min(step, POLL_STEPS_MS.length - 1)];
+  const retry = Math.min(...pending.map((item) => parseTs(item.next_enrich_at)?.getTime() ?? 0));
+  return retry - Date.now() > delay ? Math.min(retry - Date.now() + RETRY_SLACK_MS, 2 ** 31 - 1) : delay;
+}
 
 export async function api(path, { method = "GET", body } = {}) {
   const headers = { Authorization: "tma " + tg.initData };

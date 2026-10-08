@@ -51,7 +51,7 @@ Plain text without a URL from an invitee matches nothing and is ignored.
 
 Callback-data prefixes (`keyboards.py`, `notes_ui.py`, max 64 bytes): `m` menu, `o` option
 picker, `s` set value, `t` try voice/model, `j` job actions (`run`/`settings`/`cancel`/`save`),
-`n` notes item actions (`offer`/`restore`). Pick a new letter for a new family.
+`n` notes item actions (`offer`/`restore`/`done`). Pick a new letter for a new family.
 
 ## The card lifecycle (`handlers/documents.py`)
 
@@ -104,8 +104,9 @@ Failures go to `schedule_retry` (backoff 1 min → 12 h, then `failed`). The swe
 (`NOTES_ENRICH_SWEEP_SECONDS`) retries anything due and anything a restart interrupted; a retry
 leaves ✍ in place. `apps/*` never imports aiogram: the bot passes `notify` and `download` in as
 callbacks. If notes fails to start, the bot runs without it: direct messages get 👎, a link still
-gets its card, and 💾 answers "Notes are unavailable". The `NotesCB` handlers stay only for
-buttons on old Acknowledgement messages: 🤖 still works, ↩️ only removes itself (notes ADR-0010).
+gets its card, and 💾 answers "Notes are unavailable". The `NotesCB` `offer` and `restore`
+handlers stay only for buttons on old Acknowledgement messages: 🤖 still works, ↩️ only removes
+itself (notes ADR-0010); `done` is current (Reminders, below).
 
 **Reminders (notes ADR-0011).** An Item with a Due (`due_at`, UTC) is a Reminder.
 `NotesRuntime.start_reminder_loop` runs `remind_once` every 30 s: `claim_due_reminders` marks

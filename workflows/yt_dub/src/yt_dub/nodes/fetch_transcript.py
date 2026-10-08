@@ -56,9 +56,7 @@ def build_fetch_transcript_node(
         except YouTubeError as exc:
             return {**state, "error": str(exc)}
 
-        # meta_from_info() coerces a missing duration to 0.0, which would otherwise
-        # sail through the duration cap below and price at $0 (M1). Check the raw
-        # info dict instead, before that coercion happens.
+        # A missing duration must be rejected here: it would sail through the cap and price at $0 (M1).
         not_a_video = info.get("_type", "video") != "video"
         if not_a_video or info.get("is_live") or info.get("duration") is None:
             return {
@@ -87,10 +85,7 @@ def build_fetch_transcript_node(
         }
 
         preferred = _preferred_langs(meta.language, config.caption_languages)
-        try:
-            found = fetch_captions(info, preferred=preferred, proxy=proxy)
-        except YouTubeError as exc:
-            return {**base, "error": str(exc)}
+        found = fetch_captions(info, preferred=preferred, proxy=proxy)
 
         if found is None:
             log.info("yt_dub: no captions for %s, needs STT", meta.video_id)

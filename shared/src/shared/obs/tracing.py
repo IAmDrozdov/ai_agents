@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from importlib.metadata import PackageNotFoundError, version
 
 from opentelemetry import trace
@@ -91,13 +90,8 @@ def init_tracing_provider(
     settings: Settings,
     service_name: str,
     version_str: str,
-    excluded_env_var: str | None = None,
-    excluded_env_value: str | None = None,
 ) -> bool:
     """Initialize global tracer provider for current process."""
-
-    if excluded_env_var and excluded_env_value:
-        os.environ.setdefault(excluded_env_var, excluded_env_value)
 
     provider = TracerProvider(
         resource=_build_resource(settings, service_name, version_str),

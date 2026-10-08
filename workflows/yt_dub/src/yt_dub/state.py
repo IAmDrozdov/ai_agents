@@ -13,7 +13,6 @@ class YtDubState(TypedDict, total=False):
     title: str
     duration_s: float
     text: str
-    translated_text: str
     chapters: list[str]
     # Human label for where the transcript came from (captions or transcribed audio).
     transcript_source: str
@@ -22,7 +21,6 @@ class YtDubState(TypedDict, total=False):
     needs_stt: bool
     audio_bytes: bytes
     audio_parts: list[bytes]
-    audio_format: str
     audio_duration_s: float
     cost_lines: list[CostLine]
     facts: list[Fact]

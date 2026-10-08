@@ -67,9 +67,9 @@ def run(settings: Settings, config: PdfTtsConfig, preview: Preview, progress: Pr
     if preview.error:
         return Result.failed(preview.error)
     initial: PdfTtsState = {
-        "filename": str(preview.payload.get("filename") or preview.title),
-        "text": str(preview.payload.get("text") or ""),
-        "chapters": cast(list[str], preview.payload.get("chapters") or []),
+        "filename": str(preview.payload["filename"]),
+        "text": str(preview.payload["text"]),
+        "chapters": cast(list[str], preview.payload["chapters"]),
         "cost_lines": [],
         "facts": [],
     }
@@ -80,7 +80,7 @@ def run(settings: Settings, config: PdfTtsConfig, preview: Preview, progress: Pr
     stem = PurePosixPath(initial["filename"]).stem
     return Result(
         deliverable=AudioDeliverable(
-            data=state.get("audio_bytes") or b"",
+            data=state["audio_bytes"],
             filename=f"{stem}.ogg",
             parts=state.get("audio_parts") or [],
             duration_s=float(state.get("audio_duration_s") or 0.0),

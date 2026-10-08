@@ -58,8 +58,7 @@ def estimate(settings: Settings, config: YtDubConfig, preview: Preview) -> Estim
     _ = settings
     if preview.error:
         return Estimate.failed(preview.error)
-    raw_duration = preview.payload.get("duration_s")
-    duration_s = float(raw_duration) if isinstance(raw_duration, int | float) else 0.0
+    duration_s = cast(float, preview.duration_s)
     lines: list[CostLine] = []
     approximate = False
     if preview.payload.get("needs_stt"):
@@ -88,7 +87,7 @@ def run(settings: Settings, config: YtDubConfig, preview: Preview, progress: Pro
         return Result.failed(str(state["error"]), cost)
     return Result(
         deliverable=AudioDeliverable(
-            data=state.get("audio_bytes") or b"",
+            data=state["audio_bytes"],
             filename=f"{_stem(preview.title)}.ogg",
             parts=state.get("audio_parts") or [],
             duration_s=float(state.get("audio_duration_s") or 0.0),

@@ -5,7 +5,7 @@ Translates long PDF, DOCX or Markdown documents chapter-by-chapter via the share
 ## Pipeline
 
 ```
-extract_text (shared.doc.parse_document) → translate (shared.translate) → finalize
+extract_text (shared.doc.parse_document) → translate (shared.translate)
 ```
 
 Framework: LangChain — linear chain, no cycles (ADR-003 compliant).

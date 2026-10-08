@@ -4,10 +4,11 @@ Status: ready-for-agent
 
 > **Merged into maxi-bot (2026-09-29, ADR-015).** This spec was written for the standalone
 > `maxi-notes` repo. Where it disagrees with the merge, the merge wins:
-> - **Bot:** no own bot. The Owner is the maxi-bot admin (`ADMIN_TELEGRAM_ID`). Capture is
->   **ask first**: anything sent gets a card with 💾 В заметки, the priced agents, and Cancel. 💾
->   turns the card into the Acknowledgement. There is no automatic Capture of every message.
->   Invitees never see notes. A saved link's Acknowledgement carries a 🤖 button back to the agents.
+> - **Bot:** no own bot. The Owner is the maxi-bot admin (`ADMIN_TELEGRAM_ID`). Capture has
+>   no card (ADR-0007, ADR-0009): the admin's text, social links, photos, videos and files are saved
+>   at once and acknowledged by a reaction on the message. Only a message with exactly one website
+>   URL, or an agent document, gets the ask-first card with 💾 В заметки. Invitees never see notes.
+>   A saved Link has no 🤖 button.
 > - **Classifier:** OpenAI, not Claude (ticket 05). `CLASSIFIER_*` settings are `NOTES_CLASSIFIER_*`.
 > - **Testing:** no automated tests (maxi-bot ADR-001). "Testing Decisions" and every "(seam N)"
 >   tag below are historical; checks are manual or through `uv run notes-smoke`.

@@ -434,7 +434,7 @@ async def save_handler(callback: CallbackQuery, bot: Bot, notes: NotesRuntime | 
     if card is None or notes is None:
         await callback.answer("Notes are unavailable right now.", show_alert=True)
         return
-    draft = take_draft(card.chat.id, card.message_id)
+    draft = take_draft(card)
     if draft is None:
         await callback.answer("This card has expired — send it again.", show_alert=True)
         return

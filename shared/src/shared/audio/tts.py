@@ -31,13 +31,6 @@ INSTRUCTABLE_MODELS = {
 
 TTS_TIMEOUT_S = 180.0
 
-FORMAT_MIME: dict[str, str] = {
-    "mp3": "mpeg",
-    "opus": "ogg",
-    "aac": "aac",
-    "flac": "flac",
-}
-
 
 class SpeechSpec(BaseModel):
     """Everything the speech stage needs; voice and price follow the model unless set."""
@@ -79,7 +72,6 @@ class TtsEstimate:
 class TtsResult:
     audio_bytes: bytes
     audio_parts: list[bytes]
-    audio_format: str
     audio_duration_s: float
     chars_billed: int
     chunk_count: int
@@ -215,7 +207,6 @@ def synthesize(
     return TtsResult(
         audio_bytes=audio_bytes,
         audio_parts=blobs if len(audio_bytes) > spec.retain_parts_over_bytes else [],
-        audio_format=FORMAT_MIME.get(spec.output_format, spec.output_format),
         audio_duration_s=audio_duration_s,
         chars_billed=chars_billed,
         chunk_count=total,

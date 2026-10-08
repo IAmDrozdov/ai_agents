@@ -51,7 +51,6 @@ class Filing(BaseModel):
     gist: str = ""
     title: str | None = None
     author: str | None = None
-    source: str | None = None
     confident: bool = True
     due: datetime | None = None  # a naive wall-clock moment in the Owner's zone (ADR-0011)
 

@@ -104,7 +104,7 @@ export function openDetail({ list, host, item, fresh = false, ...hooks }) {
       pollStep += 1;
       await freshen();
       schedulePoll();
-    }, pollDelay(pollStep));
+    }, pollDelay(pollStep, [state.detail]));
   }
 
   function onReturn() {
@@ -240,7 +240,7 @@ export function openDetail({ list, host, item, fresh = false, ...hooks }) {
     if (state.busy) return;
     haptic("select");
     state.dueOpen = false;
-    if (state.detail.due_at) await patch({ due: null }, { due_at: null, reminded_at: null });
+    if (state.detail.due_at) await patch({ due: null }, { due_at: null });
     else sync(state.detail);
   }
 
@@ -275,7 +275,6 @@ export function openDetail({ list, host, item, fresh = false, ...hooks }) {
 
   // The bot replies to the original message within a couple of seconds; the app gets out of the way.
   async function showInChat() {
-    if (state.busy) return;
     const shown = await act(() => api(`/notes/items/${state.detail.id}/show`, { method: "POST" }));
     if (!shown) return;
     haptic("success");

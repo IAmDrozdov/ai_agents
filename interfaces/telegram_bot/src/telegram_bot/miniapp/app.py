@@ -54,7 +54,6 @@ def create_app(notes_db: Database) -> FastAPI:
     app.state.notes_db = notes_db
     # Any build segment serves the current files, so a shell from before a deploy still loads.
     app.mount("/static/{build}", StaticFiles(directory=STATIC), name="assets")
-    app.mount("/static", StaticFiles(directory=STATIC), name="static")
     app.include_router(api_usage.router)
     app.include_router(api_notes.router)
     # Inside the header middleware: that one streams every response, which gzip would compress regardless of size.

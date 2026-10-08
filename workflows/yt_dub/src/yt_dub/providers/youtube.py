@@ -128,7 +128,7 @@ def meta_from_info(info: dict[str, Any]) -> VideoMeta:
     return VideoMeta(
         video_id=str(info.get("id") or ""),
         title=str(info.get("title") or "video"),
-        duration_s=float(info.get("duration") or 0.0),
+        duration_s=float(info["duration"]),
         language=info.get("language"),
         subtitle_langs=sorted((info.get("subtitles") or {}).keys()),
         automatic_caption_langs=sorted((info.get("automatic_captions") or {}).keys()),
@@ -262,8 +262,8 @@ def download_audio(url: str, *, max_bytes: int, proxy: str | None = None) -> tup
             format="worstaudio/worst",
             outtmpl=str(Path(tmp) / "%(id)s.%(ext)s"),
             skip_download=False,
-            # Aborts mid-download once the cap is hit, instead of writing the whole
-            # file to tmpfs and only checking the size afterwards.
+            # yt-dlp skips the download up front when Content-Length is over the cap;
+            # without that header the size is only checked after the download.
             max_filesize=max_bytes,
         )
         try:
@@ -273,15 +273,16 @@ def download_audio(url: str, *, max_bytes: int, proxy: str | None = None) -> tup
         except Exception as exc:
             raise _wrap_error(exc, proxied=bool(proxy)) from exc
 
+        limit = (
+            f"the {max_bytes / 1024 / 1024:.0f} MB transcription limit. This video has no captions, "
+            "and ffmpeg-based splitting is not available on this deployment."
+        )
         if not path.exists():
-            raise YouTubeError("yt-dlp reported success but produced no audio file.")
-
+            # yt-dlp skips an over-cap stream with a known size and still reports success.
+            raise YouTubeError(
+                f"yt-dlp produced no audio file, most likely because it is over {limit}"
+            )
         size = path.stat().st_size
         if size > max_bytes:
-            raise YouTubeError(
-                f"Downloaded audio is {size / 1024 / 1024:.1f} MB, over the "
-                f"{max_bytes / 1024 / 1024:.0f} MB transcription limit. This video has no "
-                "captions and is too long for the audio-download fallback — ffmpeg-based "
-                "splitting is not available on this deployment."
-            )
+            raise YouTubeError(f"Downloaded audio is {size / 1024 / 1024:.1f} MB, over {limit}")
         return path.read_bytes(), path.suffix.lstrip(".") or "m4a"
