@@ -17,6 +17,7 @@ from shared.config import settings
 
 from .. import db, user_config
 from ..access import is_admin
+from ..cards import CardBook
 from ..catalog import (
     DAILY_COST_WINDOW_HOURS,
     DAILY_USER_COST_LIMIT_USD,
@@ -36,12 +37,12 @@ from ..keyboards import (
     SetCB,
     TryCB,
     confirm_menu,
+    editable,
     keep_menu,
     options_menu,
     root_menu,
     section_menu,
 )
-from . import documents
 
 router = Router(name="settings")
 
@@ -51,16 +52,13 @@ async def settings_command(message: Message) -> None:
     await message.answer("⚙️ <b>Settings</b>", reply_markup=root_menu())
 
 
-def _job_back(callback: CallbackQuery) -> bool:
-    message = documents._accessible(callback)
-    if message is None:
-        return False
-    item = documents.pending.get(message.chat.id)
-    return item is not None and item.message_id == message.message_id
+def _job_back(callback: CallbackQuery, cards: CardBook) -> bool:
+    message = editable(callback)
+    return message is not None and cards.owns_job(message.chat.id, message.message_id)
 
 
 async def _edit(callback: CallbackQuery, text: str, reply_markup) -> None:
-    message = documents._accessible(callback)
+    message = editable(callback)
     if message is None:
         return
     # TelegramBadRequest "message is not modified" — the menu already shows this page.
@@ -69,9 +67,9 @@ async def _edit(callback: CallbackQuery, text: str, reply_markup) -> None:
 
 
 @router.callback_query(MenuCB.filter(F.page == "root"))
-async def root_page(callback: CallbackQuery) -> None:
+async def root_page(callback: CallbackQuery, cards: CardBook) -> None:
     await callback.answer()
-    await _edit(callback, "⚙️ <b>Settings</b>", root_menu(with_job_back=_job_back(callback)))
+    await _edit(callback, "⚙️ <b>Settings</b>", root_menu(with_job_back=_job_back(callback, cards)))
 
 
 @router.callback_query(MenuCB.filter(F.page.in_({"translator", "tts"})))
@@ -90,7 +88,7 @@ async def section_page(callback: CallbackQuery, callback_data: MenuCB) -> None:
 @router.callback_query(MenuCB.filter(F.page == "close"))
 async def close_page(callback: CallbackQuery) -> None:
     await callback.answer()
-    message = documents._accessible(callback)
+    message = editable(callback)
     if message is not None:
         await message.edit_text("⚙️ Settings saved.")
 
@@ -186,7 +184,7 @@ async def try_action(callback: CallbackQuery, callback_data: TryCB) -> None:
         await _show_option_page(callback, callback_data.key_id)
         return
 
-    message = documents._accessible(callback)
+    message = editable(callback)
     if message is None:
         await callback.answer()
         return

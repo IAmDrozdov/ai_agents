@@ -17,7 +17,7 @@ To confirm a new layer rule bites, plant a forbidden import (e.g. `import aiogra
 
 ```bash
 uv run smoke <workflow> <path-or-url>            # preview + price are free; it asks before paying
-uv run notes-smoke <url-or-text>                 # fetch + classify one input; prints the Filing
+uv run notes-smoke <url-or-text>                 # Capture + enrich one input on a throwaway database; --db PATH keeps one (it is written to); prints the Item
 uv run notes-smoke http://169.254.169.254/       # the SSRF guard must refuse it
 NOTES_CLASSIFIER_PROVIDER=fake uv run notes-smoke <url>   # offline classifier, no spend
 ```
@@ -49,6 +49,12 @@ change is not done until, at 320 and 393 px, every tab has `scrollWidth == clien
 form control computes to at least 16 px, and a `PerformanceObserver` on `layout-shift` reads 0
 while a chip, filter or status is tapped.
 
+Signed-curl List checks (one `notes.domain.lists` List per request; seed with `miniapp_local.py up`):
+- `GET /api/notes/items?section=<id>&status=todo` → that Section's todo Items, newest first, with `total`;
+- `…/items?overdue=true` → every Section, todo only, earliest Due first, none of them done;
+- `…/items?q=🧪` → both Statuses, at most 100;
+- `…/items?ids=1,2` → exactly those Items as they are now (the Recheck).
+
 The build hash is computed at startup, so restart the server after editing a static file
 (ADR-019). To see the request waterfall the way the phone does, turn on the MCP's "Fast 3G" (about
 560 ms a request, near Funnel's cost). Read `performance.getEntriesByType('resource')`: a warm reload
@@ -74,7 +80,9 @@ from aiogram.methods import SendMessage
 from aiogram.types import Chat, Message
 from telegram_bot import access, db
 from telegram_bot.access import AccessMiddleware
-from telegram_bot.handlers import documents, notes, setup_routers
+from telegram_bot import notes_runtime
+from telegram_bot.cards import CardBook
+from telegram_bot.handlers import setup_routers
 from telegram_bot.worker import JobQueue
 
 class Rec(BaseSession):
@@ -94,14 +102,15 @@ db.init_db()
 db.redeem_invite(access.mint_invite(100), 300, "inv", "Inv")      # user 300 = invitee
 bot = Bot(token="42:TEST", session=(tg := Rec()))
 dp = Dispatcher(); dp["queue"] = JobQueue()
-dp["notes"] = notes.build_runtime()          # or NotesRuntime(db=..., http=fake, classifier=FakeClassifier())
+dp["notes"] = notes_runtime.build_runtime()  # or NotesRuntime(db=..., http=fake, classifier=FakeClassifier())
+dp["cards"] = CardBook(intake=Stub())        # Stub: the Intake port below
 dp.update.outer_middleware(AccessMiddleware()); setup_routers(dp)
 # await dp.feed_update(bot, Update(update_id=1, message=Message(..., from_user=User(id=100,...))))
 ```
 
-- **Network:** stub it at the module seam. Set `documents.scrape_url` to a function returning a
-  `ScrapedArticle`, give the notes runtime a fake `http`, and avoid YouTube links, because
-  `yt_dub` preview goes online.
+- **Network:** stub it at the `Intake` seam. `dp["cards"] = CardBook(intake=Stub())` where
+  `Stub.scrape` returns a `ScrapedArticle` and `Stub.preview` a `Preview`; YouTube links then work
+  offline. Give the notes runtime a fake `http`.
 - **Callbacks:** feed `CallbackQuery(data=JobCB(action="save").pack(), message=<the card>)`.
 - **Races:** start the message feed as a task, tap while the (stubbed) scrape sleeps, then
   assert on the final edit.
@@ -109,11 +118,14 @@ dp.update.outer_middleware(AccessMiddleware()); setup_routers(dp)
   - an invitee's card has no 💾 and its status line has no keyboard;
   - an invitee's plain text is ignored;
   - the admin's commands still reach their routers;
-  - a document never becomes a note.
+  - a document never becomes a note;
+  - `routing.route(Incoming(...))` is a plain-value check, no Dispatcher needed: one assertion per
+    `Kind`, admin and invitee, including a captioned audio (`media="other"`) → `ignore`.
 - **Reminders (notes ADR-0011):** the fake Classifier reads «напомни 2026-10-10 19:00» from a Note,
   an Annotation, a caption or a Transcript, so every kind of Capture can be made a Reminder offline;
   `NotesRuntime.remind_once(bot, now)` takes the clock, so a harness drives the reminder pass and
-  asserts on the recorded replies. `notes-smoke --now "YYYY-MM-DD HH:MM" --zone <IANA>` runs the real
+  asserts on the recorded replies; `reminders.claim_due(db, now=...)` and a stub `notify(notice)`
+  check the claim and the Due line without a bot. `notes-smoke --now "YYYY-MM-DD HH:MM" --zone <IANA>` runs the real
   Classifier on a phrasing and prints the Due.
 
 ## 4. Production, after `deploy.sh` (free)

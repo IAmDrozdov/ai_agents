@@ -4,422 +4,67 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import io
-from collections.abc import Coroutine
-from dataclasses import dataclass, field
-from datetime import UTC, datetime
-from typing import Any
 
-import aiohttp
 from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
 from aiogram.types import CallbackQuery, Message
 
-from notes.classify import make_classifier
-from notes.classify.port import Classifier, ClassifierError, DueRequest
-from notes.db import Database
+from notes.capture import Origin
 from notes.domain import items
-from notes.domain import settings as settings_store
-from notes.domain.items import Item
-from notes.domain.urls import extract_urls
-from notes.enrich import thumbnail
-from notes.enrich.http import AiohttpClient, HttpClient
-from notes.enrich.pipeline import Notify, enrich_item
-from notes.enrich.voice import Download, VoiceRejected, VoiceUnavailable
-from notes.sweeper import run_sweeper
-from shared.config import settings
 from shared.obs import get_logger
 
-from .. import notes_ui
+from .. import notes_capture, notes_ui, routing
 from ..access import is_admin
+from ..cards import CardBook
 from ..keyboards import JobCB
+from ..notes_capture import Draft, draft_of, links_of
+from ..notes_runtime import NotesRuntime
 from ..notes_ui import NotesCB
-from .documents import (
-    Draft,
-    body_of,
-    card_link,
-    draft_of,
-    is_admin_text,
-    is_agent_document,
-    links_of,
-    offer_link,
-    restore_draft,
-    sender_of,
-    take_draft,
-)
 
 log = get_logger(__name__)
 
 router = Router(name="notes")
 
-PREVIEW_MAX_BYTES = 300_000
-# The Bot API refuses getFile above this; a longer Voice cannot be transcribed.
-TELEGRAM_DOWNLOAD_MAX = 20 * 1024 * 1024
-SHOW_POLL_S = 2
-REMIND_POLL_S = 30
 
-
-@dataclass
-class NotesRuntime:
-    db: Database
-    http: HttpClient
-    classifier: Classifier
-    # Held so background enrichments are not garbage collected mid-flight.
-    tasks: set[asyncio.Task[Any]] = field(default_factory=set)
-
-    def spawn(self, coroutine: Coroutine[Any, Any, Any]) -> None:
-        task = asyncio.create_task(coroutine)
-        self.tasks.add(task)
-        task.add_done_callback(self.tasks.discard)
-
-    def notify_for(self, bot: Bot) -> Notify:
-        """What Enrichment tells the chat: the reaction, and the Due line when it filled a Due."""
-
-        async def notify(item: Item, due_filled: bool) -> None:
-            await notes_ui.acknowledge(bot, item)
-            if due_filled and item.status == "todo":
-                zone = await asyncio.to_thread(settings_store.get_zone, self.db)
-                await notes_ui.announce_due(bot, item, zone)
-
-        return notify
-
-    def start_sweeper(self, bot: Bot) -> None:
-        self.spawn(
-            run_sweeper(
-                self.db,
-                http=self.http,
-                classifier=self.classifier,
-                notify=self.notify_for(bot),
-                interval_s=max(settings.notes_enrich_sweep_seconds, 5),
-                download=telegram_download(bot),
-            )
-        )
-
-    def start_thumb_backfill(self) -> None:
-        """Give Items without a Thumbnail one, once per start: a deploy or a restored Backup heals itself."""
-        self.spawn(self._thumb_backfill())
-
-    async def _thumb_backfill(self) -> None:
-        try:
-            counts = await thumbnail.backfill(self.db, self.http)
-        except Exception:
-            log.exception("notes: thumbnail backfill failed")
-            return
-        log.info("notes: thumbnail backfill %s", counts)
-
-    def start_show_loop(self, bot: Bot) -> None:
-        self.spawn(self._show_loop(bot))
-
-    async def _show_loop(self, bot: Bot) -> None:
-        """Serve the Mini App's "Показать в чате" requests; the database is the queue (ADR-0008)."""
-        while True:
-            try:
-                for item in await asyncio.to_thread(items.claim_show_requests, self.db):
-                    await notes_ui.show_in_chat(bot, item)
-            except Exception:
-                log.exception("notes: show-in-chat pass failed; will try again")
-            await asyncio.sleep(SHOW_POLL_S)
-
-    def start_reminder_loop(self, bot: Bot) -> None:
-        self.spawn(self._reminder_loop(bot))
-
-    async def _reminder_loop(self, bot: Bot) -> None:
-        """Hand todo Reminders back at their Due; the database is the queue (ADR-0011)."""
-        while True:
-            try:
-                await self.remind_once(bot)
-            except Exception:
-                log.exception("notes: reminder pass failed; will try again")
-            await asyncio.sleep(REMIND_POLL_S)
-
-    async def remind_once(self, bot: Bot, now: datetime | None = None) -> int:
-        """One reminder pass at `now`: claim every due Reminder and send it; returns how many."""
-        due = await asyncio.to_thread(items.claim_due_reminders, self.db, now=now)
-        for item in due:
-            try:
-                sent = await notes_ui.send_reminder(bot, item)
-            except Exception:
-                log.exception("notes: reminder for item %s failed", item.id)
-                sent = False
-            if not sent:
-                await asyncio.to_thread(items.release_reminder, self.db, item)
-        return len(due)
-
-    async def request_reminder(
-        self, bot: Bot, item: Item, words: str, reply_to: int | None
-    ) -> Item | None:
-        """A re-sent Link's own words may ask for a reminder: the saved Item gets that Due and reopens."""
-        if not words.strip():
-            return None
-        now = datetime.now(UTC)
-        zone = await asyncio.to_thread(settings_store.get_zone, self.db)
-        request = DueRequest(
-            text=words, now_local=items.local_clock(items.stamp(now), zone), zone=zone
-        )
-        try:
-            local = await self.classifier.due(request)
-        except ClassifierError as exc:
-            log.warning("notes: could not read a Due from a re-sent link: %s", exc)
-            return None
-        if local is None:
-            return None
-        due = items.local_to_utc(local, zone)
-        try:
-            updated = await asyncio.to_thread(items.set_reminder, self.db, item.id, due, now=now)
-        except (KeyError, ValueError):  # deleted meanwhile, or a Due not in the future
-            return None
-        await notes_ui.announce_due(bot, updated, zone, reply_to=reply_to)
-        return updated
-
-    def enrich_later(self, bot: Bot, item_id: int) -> None:
-        self.spawn(
-            enrich_item(
-                self.db,
-                item_id,
-                http=self.http,
-                classifier=self.classifier,
-                notify=self.notify_for(bot),
-                download=telegram_download(bot),
-            )
-        )
-
-
-def telegram_download(bot: Bot) -> Download:
-    """A Voice's bytes from Telegram, failures sorted into retry-later and give-up."""
-
-    async def download(file_id: str) -> bytes:
-        try:
-            file = await bot.get_file(file_id)
-            if (file.file_size or 0) > TELEGRAM_DOWNLOAD_MAX:
-                raise VoiceRejected("over Telegram's 20 MB download limit")
-            if not file.file_path:
-                raise VoiceRejected("Telegram gave no file path")
-            buffer = io.BytesIO()
-            await bot.download_file(file.file_path, destination=buffer)
-        except TelegramBadRequest as exc:  # "file is too big", a dead file_id
-            raise VoiceRejected(str(exc)) from exc
-        except TelegramAPIError as exc:
-            raise VoiceUnavailable(str(exc)) from exc
-        except aiohttp.ClientError as exc:  # its text embeds the download URL, which has the token
-            raise VoiceUnavailable(f"download failed: {exc.__class__.__name__}") from None
-        except TimeoutError:
-            raise VoiceUnavailable("download timed out") from None
-        return buffer.getvalue()
-
-    return download
-
-
-def build_runtime() -> NotesRuntime:
-    db = Database(settings.notes_db_path)
-    db.init()
-    return NotesRuntime(db=db, http=AiohttpClient(), classifier=make_classifier(settings))
-
-
-async def _capture_draft(draft: Draft, chat_id: int, notes: NotesRuntime) -> tuple[Item, bool, str]:
-    """One Item per Capture (ADR-0009): the Item, whether it is new, and the Link's Annotation."""
-    extracted = extract_urls(draft.text, linked=draft.links)
-    if len(extracted.urls) == 1:
-        capture = await asyncio.to_thread(
-            items.capture_link,
-            notes.db,
-            extracted.urls[0],
-            extracted.annotation,
-            sender=draft.sender,
-            chat_id=chat_id,
-            message_id=draft.message_id,
-        )
-        log.info("notes: link capture %s → item %s", capture.outcome, capture.item.id)
-        return capture.item, capture.outcome == "new", extracted.annotation
-    note = await asyncio.to_thread(
-        items.capture_note,
-        notes.db,
-        draft.text,
-        sender=draft.sender,
-        chat_id=chat_id,
-        message_id=draft.message_id,
-    )
-    return note, True, ""
-
-
-async def _settle(
-    bot: Bot,
-    notes: NotesRuntime,
-    chat_id: int,
-    message_id: int,
-    item: Item,
-    is_new: bool,
-    words: str = "",
+@router.message(routing.takes("capture_text"))
+async def direct_text_handler(
+    message: Message, bot: Bot, notes: NotesRuntime | None, path: routing.Path, cards: CardBook
 ) -> None:
-    """A new Item enriches; a duplicate is in notes already, but its `words` may ask for a reminder."""
-    if is_new:
-        notes.enrich_later(bot, item.id)
-        return
-    await notes.request_reminder(bot, item, words, message_id)
-    failed = item.enrichment_status == "failed"
-    await notes_ui.react(bot, chat_id, message_id, notes_ui.LOOK if failed else notes_ui.DONE)
-
-
-def _is_direct_text(message: Message) -> bool:
-    """The admin's text that gets no card: no URL, several, or one Instagram / YouTube / TikTok."""
-    return is_admin_text(message) and card_link(draft_of(message)) is None
-
-
-@router.message(_is_direct_text)
-async def direct_text_handler(message: Message, bot: Bot, notes: NotesRuntime | None) -> None:
     """Admin: text and social links go straight to notes as one Link or Note (ADR-0007, ADR-0009)."""
     user = message.from_user
-    draft = draft_of(message)
     if user is None:
         return
     if notes is None:  # notes are down: a social link still gets the agents' card
+        draft = draft_of(message)
         urls = links_of(draft)
         if len(urls) == 1:
-            await offer_link(message, urls[0], user.id, draft)
+            await cards.offer_link(message, urls[0], user.id, draft)
         else:
-            await notes_ui.react(bot, message.chat.id, message.message_id, notes_ui.LOOK)
+            await notes_ui.react(bot, message.chat.id, message.message_id, notes_ui.EMOJI["look"])
         return
-    await notes_ui.react(bot, message.chat.id, message.message_id, notes_ui.WORKING)
-    try:
-        item, is_new, words = await _capture_draft(draft, message.chat.id, notes)
-    except Exception:
-        log.exception("notes: direct save of message %s failed", message.message_id)
-        await notes_ui.react(bot, message.chat.id, message.message_id, notes_ui.LOOK)
-        return
-    await _settle(bot, notes, message.chat.id, message.message_id, item, is_new, words)
+    await notes_capture.capture_message(notes, bot, message)
 
 
-def _is_admin_file(message: Message) -> bool:
-    """The admin's photo, video or document that is not an agent document (.pdf/.docx/.md/.txt)."""
-    user = message.from_user
-    if user is None or not is_admin(user.id):
-        return False
-    if message.photo or message.video:
-        return True
-    document = message.document
-    return document is not None and not is_agent_document(document.file_name or "document")
-
-
-def _file_facts(message: Message) -> tuple[str, str | None, str | None, int | None, Any]:
-    """(file_id, file_name, mime, size, thumbnail PhotoSize-like or None) of the media in `message`."""
-    if message.photo:
-        photos = message.photo
-        best = photos[-1]
-        return (
-            best.file_id,
-            None,
-            "image/jpeg",
-            best.file_size,
-            photos[-2] if len(photos) > 1 else best,
-        )
-    if message.video:
-        video = message.video
-        return video.file_id, video.file_name, video.mime_type, video.file_size, video.thumbnail
-    document = message.document
-    assert document is not None
-    return (
-        document.file_id,
-        document.file_name,
-        document.mime_type,
-        document.file_size,
-        document.thumbnail,
-    )
-
-
-async def _download_preview(bot: Bot, thumb: Any) -> tuple[bytes, str] | None:
-    if thumb is None or (thumb.file_size or 0) > PREVIEW_MAX_BYTES:
-        return None
-    buffer = io.BytesIO()
-    try:
-        await bot.download(thumb, destination=buffer)
-    except aiohttp.ClientError:  # aiohttp's error text embeds the download URL, which has the token
-        log.warning("notes: preview download failed")
-        return None
-    return (buffer.getvalue(), "image/jpeg") if buffer.getvalue() else None
-
-
-@router.message(_is_admin_file)
-async def file_handler(message: Message, bot: Bot, notes: NotesRuntime | None) -> None:
+@router.message(routing.takes("capture_file"))
+async def file_handler(
+    message: Message, bot: Bot, notes: NotesRuntime | None, path: routing.Path
+) -> None:
     """Admin: a photo or non-text file is saved as a File Item, with its preview for the Mini App."""
     if notes is None:
-        await notes_ui.react(bot, message.chat.id, message.message_id, notes_ui.LOOK)
+        await notes_ui.react(bot, message.chat.id, message.message_id, notes_ui.EMOJI["look"])
         return
-    file_id, file_name, mime, size, thumb = _file_facts(message)
-    await notes_ui.react(bot, message.chat.id, message.message_id, notes_ui.WORKING)
-    try:
-        preview = await _download_preview(bot, thumb)
-        item = await asyncio.to_thread(
-            items.capture_file,
-            notes.db,
-            file_id=file_id,
-            file_name=file_name,
-            file_mime=mime,
-            file_size=size,
-            annotation=body_of(message),
-            preview=preview,
-            sender=sender_of(message),
-            chat_id=message.chat.id,
-            message_id=message.message_id,
-        )
-    except Exception:
-        log.exception("notes: saving a file failed")
-        await notes_ui.react(bot, message.chat.id, message.message_id, notes_ui.LOOK)
-        return
-    await _settle(bot, notes, message.chat.id, message.message_id, item, True)
+    await notes_capture.capture_message(notes, bot, message)
 
 
-def _is_admin_voice(message: Message) -> bool:
-    """The admin's voice message or round video message: saved as a Voice and transcribed."""
-    user = message.from_user
-    if user is None or not is_admin(user.id):
-        return False
-    return message.voice is not None or message.video_note is not None
-
-
-@router.message(_is_admin_voice)
-async def voice_handler(message: Message, bot: Bot, notes: NotesRuntime | None) -> None:
+@router.message(routing.takes("capture_voice"))
+async def voice_handler(
+    message: Message, bot: Bot, notes: NotesRuntime | None, path: routing.Path
+) -> None:
     """Admin: a voice or round video message becomes a Voice; Enrichment transcribes it."""
     if notes is None:
-        await notes_ui.react(bot, message.chat.id, message.message_id, notes_ui.LOOK)
+        await notes_ui.react(bot, message.chat.id, message.message_id, notes_ui.EMOJI["look"])
         return
-    await notes_ui.react(bot, message.chat.id, message.message_id, notes_ui.WORKING)
-    try:
-        if message.voice is not None:
-            voice = message.voice
-            file_id, mime, size, duration = (
-                voice.file_id,
-                voice.mime_type or "audio/ogg",
-                voice.file_size,
-                voice.duration,
-            )
-            preview = None
-        else:
-            round_video = message.video_note
-            assert round_video is not None
-            file_id, mime, size, duration = (
-                round_video.file_id,
-                "video/mp4",  # Telegram gives a video note no mime type; it is always mp4
-                round_video.file_size,
-                round_video.duration,
-            )
-            preview = await _download_preview(bot, round_video.thumbnail)
-        item = await asyncio.to_thread(
-            items.capture_voice,
-            notes.db,
-            file_id=file_id,
-            file_mime=mime,
-            file_size=size,
-            duration_s=duration,
-            annotation=body_of(message),
-            preview=preview,
-            sender=sender_of(message),
-            chat_id=message.chat.id,
-            message_id=message.message_id,
-        )
-    except Exception:
-        log.exception("notes: saving a voice failed")
-        await notes_ui.react(bot, message.chat.id, message.message_id, notes_ui.LOOK)
-        return
-    await _settle(bot, notes, message.chat.id, message.message_id, item, True)
+    await notes_capture.capture_message(notes, bot, message)
 
 
 def _admin_message(callback: CallbackQuery) -> Message | None:
@@ -429,20 +74,27 @@ def _admin_message(callback: CallbackQuery) -> Message | None:
 
 
 @router.callback_query(JobCB.filter(F.action == "save"))
-async def save_handler(callback: CallbackQuery, bot: Bot, notes: NotesRuntime | None) -> None:
+async def save_handler(
+    callback: CallbackQuery, bot: Bot, notes: NotesRuntime | None, cards: CardBook
+) -> None:
     card = _admin_message(callback)
     if card is None or notes is None:
         await callback.answer("Notes are unavailable right now.", show_alert=True)
         return
-    draft = take_draft(card)
-    if draft is None:
+    draft = cards.take_savable(card.chat.id, card.message_id)
+    if not isinstance(draft, Draft):
         await callback.answer("This card has expired — send it again.", show_alert=True)
         return
     try:
-        item, is_new, words = await _capture_draft(draft, card.chat.id, notes)
+        captured = await notes_capture.capture(
+            notes.db,
+            draft,
+            Origin(card.chat.id, draft.message_id, draft.sender),
+            classifier=notes.classifier,
+        )
     except Exception:
         log.exception("notes: saving card %s failed", card.message_id)
-        restore_draft(card.chat.id, card.message_id, draft)
+        cards.restore_savable(card.chat.id, card.message_id, draft)
         await callback.answer("Could not save — try again.", show_alert=True)
         return
     try:
@@ -450,17 +102,15 @@ async def save_handler(callback: CallbackQuery, bot: Bot, notes: NotesRuntime | 
     except TelegramAPIError as exc:
         log.warning("notes: could not delete card %s: %s", card.message_id, exc)
     if draft.message_id is not None:
-        if is_new:
-            await notes_ui.react(bot, card.chat.id, draft.message_id, notes_ui.WORKING)
-        await _settle(bot, notes, card.chat.id, draft.message_id, item, is_new, words)
-    elif is_new:
-        notes.enrich_later(bot, item.id)
+        await notes_capture.settle(notes, bot, card.chat.id, draft.message_id, captured, shown=None)
+    elif captured.enrich:
+        notes.enrich_later(bot, captured.item.id)
     await callback.answer()
 
 
 @router.callback_query(NotesCB.filter(F.action == "offer"))
 async def offer_handler(
-    callback: CallbackQuery, callback_data: NotesCB, notes: NotesRuntime | None
+    callback: CallbackQuery, callback_data: NotesCB, notes: NotesRuntime | None, cards: CardBook
 ) -> None:
     message = _admin_message(callback)
     if notes is None:
@@ -470,7 +120,7 @@ async def offer_handler(
     await callback.answer()
     if message is None or item is None or item.url is None:
         return
-    await offer_link(message, item.url, callback.from_user.id)
+    await cards.offer_link(message, item.url, callback.from_user.id)
 
 
 @router.callback_query(NotesCB.filter(F.action == "done"))

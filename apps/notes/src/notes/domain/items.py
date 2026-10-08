@@ -1,4 +1,4 @@
-"""Items: Links, Notes, Files and Voices, their Filing, Status and Due."""
+"""Items: Links, Notes, Files and Voices, their Status and Due; the Filing is `sections`."""
 
 from __future__ import annotations
 
@@ -6,27 +6,26 @@ import hashlib
 import sqlite3
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, timedelta, tzinfo
+from datetime import UTC, datetime, timedelta
 from enum import Enum, auto
 from typing import Literal
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from notes.db import Database, fold
-from notes.domain.sections import OTHER_SLUG, Section, _row_to_section, other_id
+from notes.db import Database
+from notes.domain import clock
+from notes.domain.sections import (
+    Section,
+    file_in_other,
+    filing_of,
+    filings_of,
+    in_other_alone,
+    refile,
+)
 from notes.domain.urls import normalize_url
 
 Kind = Literal["link", "note", "file", "voice"]
 Status = Literal["todo", "done"]
 EnrichmentStatus = Literal["pending", "done", "failed", "skipped"]
 CaptureOutcome = Literal["new", "existing"]
-DayField = Literal["captured", "done"]
-DAY_COLUMNS: dict[DayField, str] = {"captured": "created_at", "done": "done_at"}
-# Search reads every text field but the URL ("com" would match every Link).
-SEARCH_COLUMNS = (
-    "title", "gist", "text", "caption", "transcript", "author", "sender", "source", "file_name",
-)  # fmt: skip
-
-TIMESTAMP = "%Y-%m-%d %H:%M:%S"
 ITEM_SELECT = (
     "SELECT items.*, (SELECT etag FROM item_thumbs WHERE item_id = items.id) AS thumb FROM items"
 )
@@ -84,10 +83,6 @@ class Item:
     sections: tuple[Section, ...]
     thumb: str | None = None  # the stored Thumbnail's etag
 
-    def is_overdue(self, now: datetime | None = None) -> bool:
-        """Todo with a Due that has passed: read off the clock, never stored (ADR-0011)."""
-        return self.status == "todo" and self.due_at is not None and self.due_at <= stamp(now)
-
 
 @dataclass(frozen=True)
 class Capture:
@@ -97,55 +92,7 @@ class Capture:
     outcome: CaptureOutcome
 
 
-@dataclass(frozen=True)
-class ItemFilter:
-    """Which Items a list covers: one Status (both if None), any listed Section, a local day, a Search text."""
-
-    sections: tuple[str, ...] = ()
-    status: Status | None = "todo"
-    day: date | None = None
-    day_field: DayField = "captured"
-    tz: str = "UTC"
-    text: str = ""
-    overdue: bool = False  # only Overdue Items (ADR-0011); implies todo and spans every Section
-    ids: tuple[int, ...] = ()  # only these Items
-
-
-@dataclass(frozen=True)
-class Page:
-    items: list[Item]
-    total: int
-
-
-def stamp(now: datetime | None = None) -> str:
-    """UTC timestamp in sqlite's own `datetime('now')` format so comparisons stay textual."""
-    return (now or datetime.now(UTC)).astimezone(UTC).strftime(TIMESTAMP)
-
-
-WEEKDAYS_RU = ("понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье")
-
-
-def local_to_utc(local: datetime, tz: str) -> datetime:
-    """A naive wall-clock moment in zone `tz` as an aware UTC moment."""
-    return local.replace(tzinfo=zone(tz)).astimezone(UTC)
-
-
-def local_clock(utc_stamp: str, tz: str) -> str:
-    """A stored UTC timestamp as the Owner's local clock with the weekday: «2026-10-07 20:58, среда»."""
-    moment = datetime.strptime(utc_stamp, TIMESTAMP).replace(tzinfo=UTC).astimezone(zone(tz))
-    return f"{moment:%Y-%m-%d %H:%M}, {WEEKDAYS_RU[moment.weekday()]}"
-
-
-def _sections_of(conn: sqlite3.Connection, item_id: int) -> tuple[Section, ...]:
-    rows = conn.execute(
-        "SELECT s.* FROM sections s JOIN item_sections i ON i.section_id = s.id "
-        "WHERE i.item_id=? ORDER BY s.position, s.id",
-        (item_id,),
-    ).fetchall()
-    return tuple(_row_to_section(row) for row in rows)
-
-
-def _row_to_item(conn: sqlite3.Connection, row: sqlite3.Row) -> Item:
+def row_to_item(row: sqlite3.Row, filing: tuple[Section, ...]) -> Item:
     return Item(
         id=int(row["id"]),
         kind=row["kind"],
@@ -179,16 +126,32 @@ def _row_to_item(conn: sqlite3.Connection, row: sqlite3.Row) -> Item:
         reminded_at=row["reminded_at"],
         created_at=row["created_at"],
         updated_at=row["updated_at"],
-        sections=_sections_of(conn, int(row["id"])),
+        sections=filing,
         thumb=row["thumb"],
     )
 
 
-def _fetch(conn: sqlite3.Connection, item_id: int) -> Item:
+def fetch(conn: sqlite3.Connection, item_id: int) -> Item:
+    """One Item on an open connection; KeyError if missing."""
     row = conn.execute(f"{ITEM_SELECT} WHERE id=?", (item_id,)).fetchone()
     if row is None:
         raise KeyError(item_id)
-    return _row_to_item(conn, row)
+    return row_to_item(row, filing_of(conn, item_id))
+
+
+def rows_to_items(conn: sqlite3.Connection, rows: Sequence[sqlite3.Row]) -> list[Item]:
+    """Items for ITEM_SELECT rows, their Filings loaded in one read."""
+    filings = filings_of(conn, [int(row["id"]) for row in rows])
+    return [row_to_item(row, filings.get(int(row["id"]), ())) for row in rows]
+
+
+def fetch_many(conn: sqlite3.Connection, item_ids: Sequence[int]) -> list[Item]:
+    """The named Items that exist, by id."""
+    marks = ",".join("?" * len(item_ids))
+    rows = conn.execute(
+        f"{ITEM_SELECT} WHERE id IN ({marks}) ORDER BY id", list(item_ids)
+    ).fetchall()
+    return rows_to_items(conn, rows)
 
 
 def capture_note(
@@ -205,14 +168,11 @@ def capture_note(
         cur = conn.execute(
             "INSERT INTO items(kind, text, sender, tg_chat_id, tg_message_id, created_at, updated_at) "
             "VALUES ('note', ?, ?, ?, ?, ?, ?)",
-            (text, sender, chat_id, message_id, stamp(now), stamp(now)),
+            (text, sender, chat_id, message_id, clock.stamp(now), clock.stamp(now)),
         )
         item_id = int(cur.lastrowid or 0)
-        conn.execute(
-            "INSERT INTO item_sections(item_id, section_id) VALUES (?, ?)",
-            (item_id, other_id(db)),
-        )
-        return _fetch(conn, item_id)
+        file_in_other(conn, item_id)
+        return fetch(conn, item_id)
 
 
 def capture_file(
@@ -244,13 +204,14 @@ def capture_file(
                 sender,
                 chat_id,
                 message_id,
-                stamp(now),
-                stamp(now),
+                clock.stamp(now),
+                clock.stamp(now),
             ),
         )
         item_id = int(cur.lastrowid or 0)
-        _file_in_other(conn, db, item_id, preview)
-        return _fetch(conn, item_id)
+        file_in_other(conn, item_id)
+        _keep_preview(conn, item_id, preview)
+        return fetch(conn, item_id)
 
 
 def capture_voice(
@@ -282,21 +243,19 @@ def capture_voice(
                 sender,
                 chat_id,
                 message_id,
-                stamp(now),
-                stamp(now),
+                clock.stamp(now),
+                clock.stamp(now),
             ),
         )
         item_id = int(cur.lastrowid or 0)
-        _file_in_other(conn, db, item_id, preview)
-        return _fetch(conn, item_id)
+        file_in_other(conn, item_id)
+        _keep_preview(conn, item_id, preview)
+        return fetch(conn, item_id)
 
 
-def _file_in_other(
-    conn: sqlite3.Connection, db: Database, item_id: int, preview: tuple[bytes, str] | None
+def _keep_preview(
+    conn: sqlite3.Connection, item_id: int, preview: tuple[bytes, str] | None
 ) -> None:
-    conn.execute(
-        "INSERT INTO item_sections(item_id, section_id) VALUES (?, ?)", (item_id, other_id(db))
-    )
     if preview is not None:
         conn.execute(
             "INSERT INTO item_previews(item_id, mime, data) VALUES (?, ?, ?)",
@@ -345,7 +304,7 @@ def missing_thumbs(db: Database) -> list[Item]:
         rows = conn.execute(
             f"{ITEM_SELECT} WHERE id NOT IN (SELECT item_id FROM item_thumbs) ORDER BY id"
         ).fetchall()
-        return [_row_to_item(conn, row) for row in rows]
+        return rows_to_items(conn, rows)
 
 
 def capture_link(
@@ -366,49 +325,14 @@ def capture_link(
             "INSERT OR IGNORE INTO items"
             "(kind, url, url_normalized, text, sender, tg_chat_id, tg_message_id, "
             "created_at, updated_at) VALUES ('link', ?, ?, ?, ?, ?, ?, ?, ?)",
-            (url, key, annotation, sender, chat_id, message_id, stamp(now), stamp(now)),
+            (url, key, annotation, sender, chat_id, message_id, clock.stamp(now), clock.stamp(now)),
         )
         if cur.rowcount == 1:
             item_id = int(cur.lastrowid or 0)
-            conn.execute(
-                "INSERT INTO item_sections(item_id, section_id) VALUES (?, ?)",
-                (item_id, other_id(db)),
-            )
-            return Capture(_fetch(conn, item_id), "new")
+            file_in_other(conn, item_id)
+            return Capture(fetch(conn, item_id), "new")
         row = conn.execute(f"{ITEM_SELECT} WHERE url_normalized=?", (key,)).fetchone()
-        return Capture(_row_to_item(conn, row), "existing")
-
-
-def _replace_sections(conn: sqlite3.Connection, item_id: int, slugs: Sequence[str]) -> None:
-    """Unknown slugs are dropped; an empty Filing falls back to Other (ADR-0002)."""
-    rows = (
-        conn.execute(
-            f"SELECT id FROM sections WHERE slug IN ({','.join('?' * len(slugs))})", tuple(slugs)
-        ).fetchall()
-        if slugs
-        else []
-    )
-    section_ids = [int(row["id"]) for row in rows]
-    if not section_ids:
-        section_ids = [
-            int(
-                conn.execute("SELECT id FROM sections WHERE slug=?", (OTHER_SLUG,)).fetchone()["id"]
-            )
-        ]
-    conn.execute("DELETE FROM item_sections WHERE item_id=?", (item_id,))
-    conn.executemany(
-        "INSERT INTO item_sections(item_id, section_id) VALUES (?, ?)",
-        [(item_id, section_id) for section_id in section_ids],
-    )
-
-
-def _in_other_alone(conn: sqlite3.Connection, item_id: int) -> bool:
-    rows = conn.execute(
-        "SELECT s.slug FROM item_sections x JOIN sections s ON s.id = x.section_id "
-        "WHERE x.item_id=?",
-        (item_id,),
-    ).fetchall()
-    return [row["slug"] for row in rows] in ([], [OTHER_SLUG])
+        return Capture(row_to_item(row, filing_of(conn, int(row["id"]))), "existing")
 
 
 def store_enrichment(
@@ -423,12 +347,9 @@ def store_enrichment(
     caption: str | None = None,
     image_url: str | None = None,
     error: str | None = None,
-    due: datetime | None = None,
     now: datetime | None = None,
 ) -> Item:
     """Record what Enrichment found; the Classifier files the Item only while it is in Other alone.
-
-    A `due` (UTC) fills an empty Due and never replaces one (ADR-0011).
 
     Raises KeyError if the Item was deleted while it was being enriched.
     """
@@ -437,18 +358,13 @@ def store_enrichment(
             "UPDATE items SET title=?, source=?, author=?, caption=?, image_url=?, gist=?, "
             "enrichment_status='done', enrichment_error=?, next_enrich_at=NULL, updated_at=? "
             "WHERE id=?",
-            (title, source, author, caption, image_url, gist, error, stamp(now), item_id),
+            (title, source, author, caption, image_url, gist, error, clock.stamp(now), item_id),
         )
         if cur.rowcount == 0:
             raise KeyError(item_id)
-        if due is not None:
-            conn.execute(
-                "UPDATE items SET due_at=?, reminded_at=NULL WHERE id=? AND due_at IS NULL",
-                (stamp(due), item_id),
-            )
-        if _in_other_alone(conn, item_id):
-            _replace_sections(conn, item_id, sections)
-        return _fetch(conn, item_id)
+        if in_other_alone(conn, item_id):
+            refile(conn, item_id, sections)
+        return fetch(conn, item_id)
 
 
 def schedule_retry(db: Database, item_id: int, error: str, *, now: datetime | None = None) -> Item:
@@ -464,16 +380,22 @@ def schedule_retry(db: Database, item_id: int, error: str, *, now: datetime | No
             conn.execute(
                 "UPDATE items SET enrichment_status='failed', enrichment_attempts=?, "
                 "enrichment_error=?, next_enrich_at=NULL, updated_at=? WHERE id=?",
-                (attempts, error, stamp(now), item_id),
+                (attempts, error, clock.stamp(now), item_id),
             )
         else:
             moment = (now or datetime.now(UTC)).astimezone(UTC)
             conn.execute(
                 "UPDATE items SET enrichment_status='pending', enrichment_attempts=?, "
                 "enrichment_error=?, next_enrich_at=?, updated_at=? WHERE id=?",
-                (attempts, error, stamp(moment + BACKOFF[attempts - 1]), stamp(now), item_id),
+                (
+                    attempts,
+                    error,
+                    clock.stamp(moment + BACKOFF[attempts - 1]),
+                    clock.stamp(now),
+                    item_id,
+                ),
             )
-        return _fetch(conn, item_id)
+        return fetch(conn, item_id)
 
 
 def mark_failed(db: Database, item_id: int, error: str, *, now: datetime | None = None) -> Item:
@@ -482,9 +404,9 @@ def mark_failed(db: Database, item_id: int, error: str, *, now: datetime | None 
         conn.execute(
             "UPDATE items SET enrichment_status='failed', enrichment_error=?, "
             "next_enrich_at=NULL, updated_at=? WHERE id=?",
-            (error, stamp(now), item_id),
+            (error, clock.stamp(now), item_id),
         )
-        return _fetch(conn, item_id)
+        return fetch(conn, item_id)
 
 
 def request_reenrich(db: Database, item_id: int, *, now: datetime | None = None) -> Item:
@@ -494,9 +416,9 @@ def request_reenrich(db: Database, item_id: int, *, now: datetime | None = None)
             "UPDATE items SET enrichment_status='pending', enrichment_attempts=0, "
             "enrichment_error=NULL, next_enrich_at=?, updated_at=?, "
             "transcript=CASE WHEN kind='voice' THEN NULL ELSE transcript END WHERE id=?",
-            (stamp(now), stamp(now), item_id),
+            (clock.stamp(now), clock.stamp(now), item_id),
         )
-        return _fetch(conn, item_id)
+        return fetch(conn, item_id)
 
 
 def store_transcript(db: Database, item_id: int, text: str) -> None:
@@ -510,9 +432,9 @@ def store_transcript(db: Database, item_id: int, text: str) -> None:
 def request_show(db: Database, item_id: int, *, now: datetime | None = None) -> Item | None:
     """Ask the bot to point at the Item's original message in the chat; None if missing."""
     with db.session() as conn:
-        conn.execute("UPDATE items SET show_requested_at=? WHERE id=?", (stamp(now), item_id))
+        conn.execute("UPDATE items SET show_requested_at=? WHERE id=?", (clock.stamp(now), item_id))
         try:
-            return _fetch(conn, item_id)
+            return fetch(conn, item_id)
         except KeyError:
             return None
 
@@ -524,43 +446,7 @@ def claim_show_requests(db: Database) -> list[Item]:
             "UPDATE items SET show_requested_at=NULL WHERE show_requested_at IS NOT NULL "
             "RETURNING id"
         ).fetchall()
-        return [_fetch(conn, int(row["id"])) for row in rows]
-
-
-def claim_due_reminders(db: Database, *, now: datetime | None = None) -> list[Item]:
-    """Todo Reminders whose Due has come, marked as sent by the same statement so each goes out once."""
-    moment = stamp(now)
-    with db.session() as conn:
-        rows = conn.execute(
-            "UPDATE items SET reminded_at=? WHERE status='todo' AND due_at IS NOT NULL "
-            "AND due_at <= ? AND reminded_at IS NULL RETURNING id",
-            (moment, moment),
-        ).fetchall()
-        return [_fetch(conn, int(row["id"])) for row in sorted(rows, key=lambda r: r["id"])]
-
-
-def release_reminder(db: Database, item: Item) -> None:
-    """Hand a claimed reminder back when sending it failed for a reason worth retrying."""
-    with db.session() as conn:
-        conn.execute(
-            "UPDATE items SET reminded_at=NULL WHERE id=? AND reminded_at=?",
-            (item.id, item.reminded_at),
-        )
-
-
-def set_reminder(db: Database, item_id: int, due: datetime, *, now: datetime | None = None) -> Item:
-    """A fresh explicit request: the Due replaces any old one and the Item goes back to todo (ADR-0011)."""
-    if due.astimezone(UTC) <= (now or datetime.now(UTC)).astimezone(UTC):
-        raise ValueError("The Due must be in the future")
-    with db.session() as conn:
-        cur = conn.execute(
-            "UPDATE items SET due_at=?, reminded_at=NULL, status='todo', done_at=NULL, "
-            "updated_at=? WHERE id=?",
-            (stamp(due), stamp(now), item_id),
-        )
-        if cur.rowcount == 0:
-            raise KeyError(item_id)
-        return _fetch(conn, item_id)
+        return fetch_many(conn, [int(row["id"]) for row in rows])
 
 
 def claim_due_enrichments(db: Database, *, now: datetime | None = None) -> list[int]:
@@ -571,7 +457,7 @@ def claim_due_enrichments(db: Database, *, now: datetime | None = None) -> list[
             "SELECT id FROM items WHERE enrichment_status='pending' AND ("
             "(next_enrich_at IS NOT NULL AND next_enrich_at <= ?) OR "
             "(next_enrich_at IS NULL AND updated_at <= ?)) ORDER BY id",
-            (stamp(moment), stamp(moment - STALE_PENDING)),
+            (clock.stamp(moment), clock.stamp(moment - STALE_PENDING)),
         ).fetchall()
     return [int(row["id"]) for row in rows]
 
@@ -579,79 +465,9 @@ def claim_due_enrichments(db: Database, *, now: datetime | None = None) -> list[
 def get_item(db: Database, item_id: int) -> Item | None:
     with db.session(readonly=True) as conn:
         try:
-            return _fetch(conn, item_id)
+            return fetch(conn, item_id)
         except KeyError:
             return None
-
-
-def zone(name: str) -> tzinfo:
-    """The named IANA zone, or UTC when it is unknown."""
-    try:
-        return ZoneInfo(name)
-    except (ZoneInfoNotFoundError, ValueError, OSError):
-        return UTC
-
-
-def local_midnight_utc(day: date, tz: str) -> str:
-    """The UTC timestamp at which `day` starts in zone `tz`."""
-    start = datetime(day.year, day.month, day.day, tzinfo=zone(tz))
-    return stamp(start)
-
-
-def _where(flt: ItemFilter, now: datetime | None = None) -> tuple[str, list[object]]:
-    clauses = ["1"]
-    params: list[object] = []
-    if flt.ids:
-        clauses.append(f"id IN ({','.join('?' * len(flt.ids))})")
-        params.extend(flt.ids)
-    if flt.overdue:
-        clauses.append("status='todo' AND due_at IS NOT NULL AND due_at <= ?")
-        params.append(stamp(now))
-    if flt.status is not None:
-        clauses.append("status=?")
-        params.append(flt.status)
-    needle = fold(flt.text.strip())
-    if needle:
-        clauses.append("(" + " OR ".join(f"instr(fold({c}), ?) > 0" for c in SEARCH_COLUMNS) + ")")
-        params.extend([needle] * len(SEARCH_COLUMNS))
-    if flt.sections:
-        marks = ",".join("?" * len(flt.sections))
-        clauses.append(
-            "id IN (SELECT x.item_id FROM item_sections x "
-            f"JOIN sections s ON s.id=x.section_id WHERE s.slug IN ({marks}))"
-        )
-        params.extend(flt.sections)
-    if flt.day is not None:
-        column = DAY_COLUMNS[flt.day_field]
-        clauses.append(f"{column} >= ? AND {column} < ?")
-        params.extend(
-            [
-                local_midnight_utc(flt.day, flt.tz),
-                local_midnight_utc(flt.day + timedelta(1), flt.tz),
-            ]
-        )
-    return " AND ".join(clauses), params
-
-
-def query(
-    db: Database,
-    flt: ItemFilter | None = None,
-    *,
-    offset: int = 0,
-    limit: int = 50,
-    now: datetime | None = None,
-) -> Page:
-    """Items the filter covers, newest first; Overdue ones earliest Due first."""
-    flt = flt or ItemFilter()
-    where, params = _where(flt, now)
-    order = "due_at ASC, id ASC" if flt.overdue else "created_at DESC, id DESC"
-    with db.session(readonly=True) as conn:
-        total = int(conn.execute(f"SELECT COUNT(*) FROM items WHERE {where}", params).fetchone()[0])
-        rows = conn.execute(
-            f"{ITEM_SELECT} WHERE {where} ORDER BY {order} LIMIT ? OFFSET ?",
-            [*params, limit, offset],
-        ).fetchall()
-        return Page(items=[_row_to_item(conn, row) for row in rows], total=total)
 
 
 def edit_item(
@@ -676,15 +492,16 @@ def edit_item(
         if row is None:
             return None
         if sections is not None:
-            _replace_sections(conn, item_id, sections)
+            refile(conn, item_id, sections)
         if isinstance(due, datetime):
             conn.execute(
-                "UPDATE items SET due_at=?, reminded_at=NULL WHERE id=?", (stamp(due), item_id)
+                "UPDATE items SET due_at=?, reminded_at=NULL WHERE id=?",
+                (clock.stamp(due), item_id),
             )
         elif due is None:
             conn.execute("UPDATE items SET due_at=NULL, reminded_at=NULL WHERE id=?", (item_id,))
         if status is not None and status != row["status"]:
-            done_at = stamp(moment) if status == "done" else None
+            done_at = clock.stamp(moment) if status == "done" else None
             conn.execute(
                 "UPDATE items SET status=?, done_at=? WHERE id=?", (status, done_at, item_id)
             )
@@ -692,12 +509,12 @@ def edit_item(
                 conn.execute(
                     "UPDATE items SET reminded_at=? WHERE id=? AND due_at <= ? "
                     "AND reminded_at IS NULL",
-                    (stamp(moment), item_id, stamp(moment)),
+                    (clock.stamp(moment), item_id, clock.stamp(moment)),
                 )
         if text is not None:
             conn.execute("UPDATE items SET text=? WHERE id=?", (text, item_id))
-        conn.execute("UPDATE items SET updated_at=? WHERE id=?", (stamp(now), item_id))
-        return _fetch(conn, item_id)
+        conn.execute("UPDATE items SET updated_at=? WHERE id=?", (clock.stamp(now), item_id))
+        return fetch(conn, item_id)
 
 
 def delete_item(db: Database, item_id: int) -> bool:

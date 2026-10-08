@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable
 from datetime import datetime
 
 from notes.classify.port import (
@@ -17,8 +17,9 @@ from notes.classify.port import (
     SectionBrief,
 )
 from notes.db import Database
-from notes.domain import items, sections, settings
+from notes.domain import clock, items, reminders, sections
 from notes.domain.items import Item
+from notes.domain.reminders import Notice, Notify
 from notes.enrich import thumbnail
 from notes.enrich.http import FetchError, HttpClient
 from notes.enrich.providers import Fetched, bare_host, fetch_for, is_youtube, youtube
@@ -26,9 +27,6 @@ from notes.enrich.voice import Download, VoiceRejected, VoiceUnavailable, transc
 from shared.obs import get_logger
 
 log = get_logger(__name__)
-
-# Called with the stored Item once Enrichment lands; the flag: this Enrichment filled its Due.
-Notify = Callable[[Item, bool], Awaitable[None]]
 
 
 def build_request(
@@ -52,7 +50,7 @@ def build_request(
         annotation=item.text,
         sender=item.sender,
         transcript=transcript,
-        now_local=items.local_clock(item.created_at, zone_name),
+        now_local=clock.local_clock(clock.parse(item.created_at), zone_name),
         zone=zone_name,
         sections=[SectionBrief(slug=s.slug, name=s.name, hint=s.hint) for s in known],
     )
@@ -173,13 +171,14 @@ async def _enrich_item(
         except Exception:  # a Thumbnail is optional: never let it hold up the Filing
             log.exception("item %s: could not keep its thumbnail", item.id)
     known = await asyncio.to_thread(sections.list_sections, db)
-    zone_name = await asyncio.to_thread(settings.get_zone, db)
+    zone_name = await asyncio.to_thread(clock.owner_zone, db)
     request = build_request(item, fetched, known, image, transcript, zone_name)
+    filing: Filing | None = None
     try:
         filing = await file_with_fallback(classifier, request, http)
     except ClassifierRefused as exc:
         log.warning("item %s: classifier refused: %s", item.id, exc)
-        updated = await _store_async(db, item, fetched, None, f"refused: {exc}", now, zone_name)
+        updated = await _store_async(db, item, fetched, None, f"refused: {exc}", now)
     except ClassifierRejected as exc:
         log.error("item %s: classifier rejected the request: %s", item.id, exc)
         await _record_failure(items.mark_failed, db, item.id, str(exc), now, notify)
@@ -193,9 +192,23 @@ async def _enrich_item(
         await _record_failure(items.schedule_retry, db, item.id, str(exc), now, notify)
         return
     else:
-        updated = await _store_async(db, item, fetched, filing, fetch_error, now, zone_name)
-    if updated is not None:
-        await notify(updated, _filled_due(item, updated, filing, zone_name))
+        updated = await _store_async(db, item, fetched, filing, fetch_error, now)
+    if updated is None:
+        return
+    try:
+        notice = await asyncio.to_thread(
+            reminders.fill_from_filing,
+            db,
+            updated,
+            filing.due if filing else None,
+            zone_name,
+            now=now,
+        )
+    except Exception:
+        # The Item is stored and done; the sweeper never retries it, so acknowledge without the Due.
+        log.exception("item %s: storing the Filing's Due failed", item.id)
+        notice = Notice(updated, None)
+    await notify(notice)
 
 
 async def _record_failure(
@@ -213,20 +226,7 @@ async def _record_failure(
         log.info("item %s was deleted while it was being enriched", item_id)
         return
     if updated.enrichment_status == "failed":
-        await notify(updated, False)
-
-
-def _due_of(item: Item, filing: Filing | None, zone_name: str) -> datetime | None:
-    """The Filing's Due as UTC; one that is not after the Capture moment is a misread and dropped."""
-    if filing is None or filing.due is None:
-        return None
-    due = items.local_to_utc(filing.due, zone_name)
-    return due if items.stamp(due) > item.created_at else None
-
-
-def _filled_due(item: Item, updated: Item, filing: Filing | None, zone_name: str) -> bool:
-    due = _due_of(item, filing, zone_name)
-    return due is not None and item.due_at is None and updated.due_at == items.stamp(due)
+        await notify(Notice(updated, None))
 
 
 async def _store_async(
@@ -236,10 +236,9 @@ async def _store_async(
     filing: Filing | None,
     error: str | None,
     now: datetime | None,
-    zone_name: str,
 ) -> Item | None:
     try:
-        return await asyncio.to_thread(_store, db, item, fetched, filing, error, now, zone_name)
+        return await asyncio.to_thread(_store, db, item, fetched, filing, error, now)
     except KeyError:  # the Owner deleted it meanwhile
         log.info("item %s was deleted while it was being enriched", item.id)
         return None
@@ -252,7 +251,6 @@ def _store(
     filing: Filing | None,
     error: str | None,
     now: datetime | None,
-    zone_name: str,
 ) -> Item:
     result = filing or Filing()
     return items.store_enrichment(
@@ -266,6 +264,5 @@ def _store(
         caption=fetched.caption if fetched else None,
         image_url=fetched.image_url if fetched else None,
         error=error,
-        due=_due_of(item, filing, zone_name),
         now=now,
     )

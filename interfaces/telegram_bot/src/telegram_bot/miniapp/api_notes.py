@@ -3,16 +3,16 @@
 from __future__ import annotations
 
 from dataclasses import asdict, fields
-from datetime import UTC, date, datetime
+from datetime import datetime
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, ConfigDict, Field
 
 from notes.db import Database
+from notes.domain import clock, items, lists, reminders, sections
 from notes.domain import dashboard as dashboard_read
-from notes.domain import items, sections, settings
-from notes.domain.items import UNSET, DayField, Item, ItemFilter, Status, Unset
+from notes.domain.items import UNSET, Item, Status, Unset
 
 from .auth import require_admin
 
@@ -76,19 +76,10 @@ def _item_json(item: Item) -> dict[str, Any]:
     """An Item as the page reads it, list and item view alike: the Due as ISO UTC."""
     data = {f.name: getattr(item, f.name) for f in fields(item) if f.name not in HIDDEN_FIELDS}
     data["sections"] = [{key: getattr(s, key) for key in SECTION_FIELDS} for s in item.sections]
-    data["overdue"] = item.is_overdue()
+    data["overdue"] = reminders.is_overdue(item)
     if item.due_at:
-        data["due_at"] = _iso(item.due_at)
+        data["due_at"] = clock.iso(item.due_at)
     return data
-
-
-def _iso(stamped: str) -> str:
-    return (
-        datetime.strptime(stamped, items.TIMESTAMP)
-        .replace(tzinfo=UTC)
-        .isoformat()
-        .replace("+00:00", "Z")
-    )
 
 
 def _found(item: Item | None) -> Item:
@@ -140,7 +131,7 @@ def get_dashboard(
 ) -> dict[str, Any]:
     # every launch opens the Dashboard: the Owner's zone is learnt here
     if tz:
-        settings.remember_zone(db, tz)
+        clock.remember_zone(db, tz)
     board = dashboard_read.dashboard(db, tz or "UTC")
     return {
         "todo": board.todo,
@@ -155,35 +146,34 @@ def get_dashboard(
 @router.get("/items")
 def get_items(
     db: DbDep,
-    section: Annotated[list[str] | None, Query(max_length=50)] = None,
+    section: Annotated[str | None, Query(max_length=50)] = None,
     status: Status = "todo",
     q: Annotated[str, Query(max_length=200)] = "",
     overdue: bool = False,
-    day: date | None = None,
-    day_field: DayField = "captured",
-    tz: Annotated[str, Query(max_length=64)] = "UTC",
     ids: Annotated[list[ItemId] | None, Query(max_length=100)] = None,
     offset: Annotated[int, Query(ge=0)] = 0,
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
 ) -> dict[str, Any]:
-    if day is not None and not date(2000, 1, 1) <= day <= date(2100, 1, 1):
-        raise HTTPException(status_code=422, detail="day out of range")
-    if ids:  # the page checking back on the Items it shows as pending
-        flt = ItemFilter(ids=tuple(ids), status=None)
-        limit = len(ids)
-    elif overdue:  # the Overdue row: every Section, todo only, earliest Due first
-        flt = ItemFilter(status="todo", overdue=True)
-    else:
-        flt = ItemFilter(
-            sections=tuple(section or ()),
-            status=None if q.strip() else status,  # Search covers both Statuses
-            day=day,
-            day_field=day_field,
-            tz=tz,
-            text=q,
-        )
-    page = items.query(db, flt, offset=offset, limit=limit)
+    """One List per request (CONTEXT: List): `ids`, `overdue`, `q`, or `section` with its `status`."""
+    page = lists.read(db, _list_of(section, status, q, overdue, ids), offset=offset, limit=limit)
     return {"items": [_item_json(item) for item in page.items], "total": page.total}
+
+
+def _list_of(
+    section: str | None, status: Status, q: str, overdue: bool, ids: list[int] | None
+) -> lists.ItemList:
+    named: list[lists.ItemList] = []
+    if ids:
+        named.append(lists.Recheck(tuple(ids)))
+    if overdue:
+        named.append(lists.Overdue())
+    if q.strip():
+        named.append(lists.Search(q))
+    if section:
+        named.append(lists.InSection(section, status))
+    if len(named) != 1:
+        raise HTTPException(status_code=422, detail="Name one List: ids, overdue, q or section")
+    return named[0]
 
 
 @router.get("/items/{item_id}")

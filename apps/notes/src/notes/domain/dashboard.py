@@ -6,10 +6,14 @@ import sqlite3
 from collections import Counter
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
+from typing import Literal
 
 from notes.db import Database
-from notes.domain.items import DAY_COLUMNS, DayField, local_midnight_utc, stamp, zone
+from notes.domain import clock
+from notes.domain.reminders import OVERDUE_SQL
 
+DayField = Literal["captured", "done"]
+DAY_COLUMNS: dict[DayField, str] = {"captured": "created_at", "done": "done_at"}
 WEEKS = 26
 
 
@@ -34,17 +38,9 @@ def _by_day(
     column = DAY_COLUMNS[field]
     rows = conn.execute(
         f"SELECT {column} AS ts FROM items WHERE {column} >= ? AND {column} < ?",
-        (local_midnight_utc(first, tz), local_midnight_utc(last + timedelta(1), tz)),
+        (clock.local_midnight_utc(first, tz), clock.local_midnight_utc(last + timedelta(1), tz)),
     ).fetchall()
-    local = zone(tz)
-    days = Counter(
-        datetime.strptime(row["ts"], "%Y-%m-%d %H:%M:%S")
-        .replace(tzinfo=UTC)
-        .astimezone(local)
-        .date()
-        .isoformat()
-        for row in rows
-    )
+    days = Counter(clock.local_day(row["ts"], tz).isoformat() for row in rows)
     return dict(days)
 
 
@@ -52,15 +48,13 @@ def dashboard(
     db: Database, tz: str = "UTC", *, now: datetime | None = None, weeks: int = WEEKS
 ) -> Dashboard:
     """One read transaction; days are the Owner's (`tz`), an unknown zone counts as UTC."""
-    today = (now or datetime.now(UTC)).astimezone(zone(tz)).date()
+    today = (now or datetime.now(UTC)).astimezone(clock.zone(tz)).date()
     first, last = window(today, weeks)
     with db.session(readonly=True) as conn:
         todo = int(conn.execute("SELECT COUNT(*) FROM items WHERE status='todo'").fetchone()[0])
         overdue = int(
             conn.execute(
-                "SELECT COUNT(*) FROM items WHERE status='todo' AND due_at IS NOT NULL "
-                "AND due_at <= ?",
-                (stamp(now),),
+                f"SELECT COUNT(*) FROM items WHERE {OVERDUE_SQL}", (clock.stamp(now),)
             ).fetchone()[0]
         )
         return Dashboard(

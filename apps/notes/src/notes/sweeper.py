@@ -8,8 +8,9 @@ from datetime import datetime
 from notes.classify.port import Classifier
 from notes.db import Database
 from notes.domain import items
+from notes.domain.reminders import Notify
 from notes.enrich.http import HttpClient
-from notes.enrich.pipeline import Notify, enrich_item
+from notes.enrich.pipeline import enrich_item
 from notes.enrich.voice import Download
 from shared.obs import get_logger
 

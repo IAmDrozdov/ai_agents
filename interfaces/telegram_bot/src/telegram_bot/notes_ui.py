@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime
 from html import escape
 
 from aiogram import Bot
@@ -22,7 +22,7 @@ from aiogram.types import (
     WebAppInfo,
 )
 
-from notes.domain import items
+from notes.capture import Acknowledgement, acknowledgement_of
 from notes.domain.items import Item
 from shared.config import settings
 from shared.obs import get_logger
@@ -37,7 +37,7 @@ HELP = (
     "browse and sort them in the app (the 📒 button next to the message field)."
 )
 WORKING, DONE, LOOK = "✍", "👌", "👎"
-REACTIONS = {"pending": WORKING, "done": DONE, "failed": LOOK}
+EMOJI: dict[Acknowledgement, str] = {"wait": WORKING, "saved": DONE, "look": LOOK}
 TITLE_LIMIT = 300
 SHOW_TEXT = "↩️ Вот оно"
 REMINDER_TEXT = "⏰ Напоминание"
@@ -72,19 +72,15 @@ async def acknowledge(bot: Bot, item: Item) -> None:
     """The reaction on the Item's Capture message that matches its Enrichment."""
     if item.tg_chat_id is None or item.tg_message_id is None:
         return
-    await react(
-        bot, item.tg_chat_id, item.tg_message_id, REACTIONS.get(item.enrichment_status, DONE)
-    )
+    await react(bot, item.tg_chat_id, item.tg_message_id, EMOJI[acknowledgement_of(item)])
 
 
 WEEKDAYS = ("пн", "вт", "ср", "чт", "пт", "сб", "вс")
 MONTHS = ("янв", "фев", "мар", "апр", "мая", "июн", "июл", "авг", "сен", "окт", "ноя", "дек")
 
 
-def format_due(due_at: str, zone: str) -> str:
-    """A stored UTC Due in the Owner's zone, as «пт, 10 окт, 19:00»."""
-    moment = datetime.strptime(due_at, items.TIMESTAMP).replace(tzinfo=UTC)
-    local = moment.astimezone(items.zone(zone))
+def format_due(local: datetime) -> str:
+    """A Due in the Owner's Zone, as «пт, 10 окт, 19:00»."""
     return f"{WEEKDAYS[local.weekday()]}, {local.day} {MONTHS[local.month - 1]}, {local:%H:%M}"
 
 
@@ -135,12 +131,10 @@ async def send_reminder(bot: Bot, item: Item) -> bool:
     return True
 
 
-async def announce_due(
-    bot: Bot, item: Item, zone: str, *, now: datetime | None = None, reply_to: int | None = None
-) -> None:
-    """One line naming a new Due, replying to the Capture or to `reply_to`; a past Due says nothing."""
+async def announce_due(bot: Bot, item: Item, due: datetime, *, reply_to: int | None = None) -> None:
+    """One line naming the Due the domain just set, replying to the Capture or to `reply_to`."""
     chat = item.tg_chat_id
-    if chat is None or item.due_at is None or item.due_at <= items.stamp(now):
+    if chat is None:
         return
     link = miniapp_link(item.id)
     markup = (
@@ -152,7 +146,7 @@ async def announce_due(
         if link
         else None
     )
-    text = f"⏰ {format_due(item.due_at, zone)}"
+    text = f"⏰ {format_due(due)}"
     target = reply_to if reply_to is not None else item.tg_message_id
     reply = (
         ReplyParameters(message_id=target, allow_sending_without_reply=True)

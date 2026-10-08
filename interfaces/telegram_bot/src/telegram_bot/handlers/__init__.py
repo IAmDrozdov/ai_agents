@@ -1,4 +1,4 @@
-"""Router registration order matters: documents claims MenuCB(page='job')."""
+"""Router order matters for callbacks (documents claims MenuCB(page='job')) and for `/settings https://x`, `/help https://x`."""
 
 from __future__ import annotations
 

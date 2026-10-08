@@ -6,7 +6,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from aiogram.filters.callback_data import CallbackData
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from .catalog import (
@@ -16,6 +16,12 @@ from .catalog import (
     SETTING_LABELS,
     option_label,
 )
+
+
+def editable(callback: CallbackQuery) -> Message | None:
+    """Callback message narrowed to an editable Message (drops Inaccessible)."""
+    message = callback.message
+    return message if isinstance(message, Message) else None
 
 
 class MenuCB(CallbackData, prefix="m"):

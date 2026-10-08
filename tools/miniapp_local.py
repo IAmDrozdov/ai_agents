@@ -63,7 +63,7 @@ def launch_url(port: int, secret: str) -> str:
 def seed_notes(path: Path) -> None:
     """A few 🧪 Sections and Items across statuses, a Link, a Note and an overdue reminder."""
     from notes.db import Database
-    from notes.domain import items, sections
+    from notes.domain import items, reminders, sections
 
     db = Database(str(path))
     db.init()
@@ -91,13 +91,11 @@ def seed_notes(path: Path) -> None:
         items.store_enrichment(db, note.id, sections=[lab.slug], title=f"🧪 Note {i}", now=now)
     items.edit_item(db, 1, status="done", now=now)
     overdue = items.capture_note(db, "🧪 overdue", now=now - timedelta(days=2))
-    items.store_enrichment(
-        db,
-        overdue.id,
-        sections=[spare.slug],
-        title="🧪 Overdue",
-        due=now - timedelta(days=1),
-        now=now,
+    stored = items.store_enrichment(
+        db, overdue.id, sections=[spare.slug], title="🧪 Overdue", now=now
+    )
+    reminders.fill_from_filing(
+        db, stored, (now - timedelta(days=1)).replace(tzinfo=None), "UTC", now=now
     )
 
 

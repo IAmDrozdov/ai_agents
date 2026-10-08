@@ -1,105 +1,146 @@
-"""`uv run notes-smoke <url-or-text | --voice FILE>`: file one input, print what came back (ADR-001)."""
+"""`uv run notes-smoke <url-or-text | --voice FILE>`: Capture and enrich one input on a throwaway database, print the Item (ADR-001)."""
 
 from __future__ import annotations
 
 import argparse
 import asyncio
+import shutil
+import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
+from notes.capture import Attachment, Origin, Payload, Text, acknowledgement_of, capture
 from notes.classify import make_classifier
-from notes.classify.port import FilingRequest, SectionBrief
-from notes.domain import items
-from notes.domain.sections import STARTER_SECTIONS
-from notes.domain.urls import extract_urls
-from notes.enrich.http import AiohttpClient, FetchError
-from notes.enrich.pipeline import file_with_fallback, load_image
-from notes.enrich.providers import Fetched, fetch_for
-from shared.audio import SttSpec, transcribe
+from notes.db import Database
+from notes.domain import clock, items
+from notes.domain.reminders import Notice
+from notes.enrich.http import AiohttpClient
+from notes.enrich.pipeline import enrich_item
+from notes.enrich.voice import Download
 from shared.config import settings
 
 TRANSCRIPT_HEAD = 400
 
 
-def _clock(now: str | None, zone: str) -> str:
-    """The Capture moment the Classifier is told: --now, or the current time, in `zone`."""
-    moment = datetime.strptime(now, "%Y-%m-%d %H:%M") if now else datetime.now(items.zone(zone))
-    return f"{moment:%Y-%m-%d %H:%M}, {items.WEEKDAYS_RU[moment.weekday()]}"
+@contextmanager
+def _database(path: Path | None) -> Iterator[Database]:
+    """A temp database deleted on exit, or the given file used in place."""
+    if path is not None:
+        db = Database(str(path))
+        db.init()
+        yield db
+        return
+    tmp = Path(tempfile.mkdtemp(prefix="notes-smoke-"))
+    try:
+        db = Database(str(tmp / "notes.sqlite3"))
+        db.init()
+        yield db
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
-async def _smoke(text: str, now: str | None, zone: str) -> int:
-    extracted = extract_urls(text)
-    # One URL is a Link; none or several is a Note of the whole text (ADR-0009).
-    url = extracted.urls[0] if len(extracted.urls) == 1 else None
-    http = AiohttpClient()
-    fetched: Fetched | None = None
-    if url:
-        try:
-            fetched = await fetch_for(url, http)
-        except FetchError as exc:
-            print(f"fetch failed: {exc.__class__.__name__}: {exc}")
+async def _print_notify(notice: Notice) -> None:
+    print(f"acknowledge: {acknowledgement_of(notice.item)}")
+    print(f" due line: {notice.due}")
+
+
+async def _run(
+    payload: Payload,
+    *,
+    db_path: Path | None,
+    now: datetime | None,
+    zone: str | None,
+    download: Download,
+) -> int:
+    with _database(db_path) as db:
+        if zone is not None:
+            clock.remember_zone(db, zone)
+        classifier = make_classifier(settings)
+        captured = await capture(db, payload, Origin(None, None), classifier=classifier, now=now)
+        print(
+            f"     kind: {captured.item.kind} ({captured.outcome}) · acknowledge: {captured.acknowledgement}"
+        )
+        if captured.due is not None:
+            print(f" due line: {captured.due}")
+        if captured.enrich:
+            await enrich_item(
+                db,
+                captured.item.id,
+                http=AiohttpClient(),
+                classifier=classifier,
+                notify=_print_notify,
+                download=download,
+                now=now,
+            )
+        item = items.get_item(db, captured.item.id)
+        if item is None:
+            print("item vanished")
             return 1
-        for field in ("source", "title", "author", "image_url", "caption"):
-            print(f"{field:>9}: {getattr(fetched, field)}")
-    image = await load_image(http, fetched.image_url) if fetched else None
-    request = FilingRequest(
-        kind="link" if url else "note",
-        url=url,
-        image=image[0] if image else None,
-        image_mime=image[1] if image else None,
-        source=fetched.source if fetched else None,
-        title=fetched.title if fetched else None,
-        author=fetched.author if fetched else None,
-        caption=fetched.caption if fetched else None,
-        annotation=extracted.annotation if url else text,
-        now_local=_clock(now, zone),
-        zone=zone,
-        sections=[SectionBrief(slug=s[0], name=s[1], hint=s[4]) for s in STARTER_SECTIONS],
+        transcript = item.transcript or ""
+        head = transcript[:TRANSCRIPT_HEAD] + ("…" if len(transcript) > TRANSCRIPT_HEAD else "")
+        for label, value in (
+            ("source", item.source),
+            ("title", item.title),
+            ("author", item.author),
+            ("caption", item.caption),
+            ("transcript", head or None),
+            ("filing", [s.slug for s in item.sections]),
+            ("gist", item.gist),
+            ("due", clock.iso(item.due_at) if item.due_at else None),
+            ("thumbnail", "yes" if item.thumb else "no"),
+            ("enrichment", item.enrichment_status),
+            ("error", item.enrichment_error),
+        ):
+            print(f"{label:>10}: {value}")
+        return 0 if item.enrichment_status == "done" and not item.enrichment_error else 1
+
+
+async def _no_download(file_id: str) -> bytes:
+    raise RuntimeError("no download in the smoke runner")
+
+
+def _voice(path: Path) -> tuple[Attachment, Download]:
+    mime = "video/mp4" if path.suffix == ".mp4" else "audio/ogg"
+    attachment = Attachment(
+        file_id=str(path), mime=mime, size=path.stat().st_size, duration_s=0, speech=True
     )
-    return await _file(request, http, image is not None)
-
-
-async def _smoke_voice(path: Path, now: str | None, zone: str) -> int:
-    """Transcribe a local voice file the way Enrichment does, then file it as a Voice."""
-    result = await asyncio.to_thread(
-        transcribe, settings, path.read_bytes(), SttSpec(), duration_s=0, filename=path.name
-    )
-    head = result.text[:TRANSCRIPT_HEAD] + ("…" if len(result.text) > TRANSCRIPT_HEAD else "")
-    print(f"transcript: {len(result.text)} chars: {head}")
-    request = FilingRequest(
-        kind="voice",
-        transcript=result.text,
-        now_local=_clock(now, zone),
-        zone=zone,
-        sections=[SectionBrief(slug=s[0], name=s[1], hint=s[4]) for s in STARTER_SECTIONS],
-    )
-    return await _file(request, AiohttpClient(), False)
-
-
-async def _file(request: FilingRequest, http: AiohttpClient, image: bool) -> int:
-    filing = await file_with_fallback(make_classifier(settings), request, http)
-    print(f"   filing: {filing.sections or ['other']} ({settings.notes_classifier_provider})")
-    print(f"    image: {'yes' if image else 'no'} · confident: {filing.confident}")
-    print(f"    title: {filing.title}")
-    print(f"     gist: {filing.gist}")
-    print(f"      due: {filing.due.isoformat(timespec='minutes') if filing.due else None}")
-    return 0
+    return attachment, lambda file_id: asyncio.to_thread(Path(file_id).read_bytes)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(prog="notes-smoke", description=__doc__)
     parser.add_argument("text", nargs="?", help="a link, or plain text for a Note")
     parser.add_argument(
-        "--voice", type=Path, help="an audio file (.ogg .m4a .mp3 .mp4) to file as a Voice"
+        "--voice",
+        type=Path,
+        help="an audio file (.ogg .m4a .mp3 .mp4) to file as a Voice (paid STT)",
     )
     parser.add_argument("--now", help='the Capture moment, "YYYY-MM-DD HH:MM" local (default: now)')
-    parser.add_argument("--zone", default="UTC", help="the Owner's IANA zone (default: UTC)")
+    parser.add_argument(
+        "--zone", help="the Owner's IANA zone to store (default: keep the Database's)"
+    )
+    parser.add_argument(
+        "--db",
+        type=Path,
+        help="use this database file in place (written to; a throwaway or Backup copy)",
+    )
     args = parser.parse_args()
+    now = (
+        clock.local_to_utc(datetime.strptime(args.now, "%Y-%m-%d %H:%M"), args.zone or "UTC")
+        if args.now
+        else None
+    )
     if args.voice is not None:
-        raise SystemExit(asyncio.run(_smoke_voice(args.voice, args.now, args.zone)))
-    if not args.text:
+        payload, download = _voice(args.voice)
+    elif args.text:
+        payload, download = Text(words=args.text), _no_download
+    else:
         parser.error("give a link, plain text, or --voice FILE")
-    raise SystemExit(asyncio.run(_smoke(args.text, args.now, args.zone)))
+    raise SystemExit(
+        asyncio.run(_run(payload, db_path=args.db, now=now, zone=args.zone, download=download))
+    )
 
 
 if __name__ == "__main__":

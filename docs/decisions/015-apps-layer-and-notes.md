@@ -1,6 +1,6 @@
 # ADR-015: An `apps/` layer, and Notes merged in from maxi-notes
 
-Status: Accepted (2026-09-29). Amended 2026-09-29: decision 3's `notes-web` sorting UI is replaced by the Mini App (ADR-016). Amended 2026-10-07: notes keeps one Status (`todo` / `done`) and no Placement (notes ADR-0010).
+Status: Accepted (2026-09-29). Amended 2026-09-29: decision 3's `notes-web` sorting UI is replaced by the Mini App (ADR-016). Amended 2026-10-07: notes keeps one Status (`todo` / `done`) and no Placement (notes ADR-0010). Amended 2026-10-08: point 3's `documents.admin_input_handler` is now `documents.link_handler` on a savable Path, the bot's Capture adapter is `telegram_bot/notes_capture.py`, and point 6's `notes-smoke` now captures and enriches on a temp Database. No decision changes.
 
 ## Context
 

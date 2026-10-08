@@ -36,7 +36,8 @@ Any Item, of any kind, that has a Due; removing the Due makes it a plain Item ag
 _Avoid_: alarm, notification, task, напоминалка
 
 **Due**:
-The moment a Reminder is for; the bot sends the Reminder back to the Owner then, and the Owner can move it later.
+The moment a Reminder is for; the bot sends the Reminder back to the Owner then, and the Owner can move it later. Stored in UTC, read in the Zone.
+Enrichment's Due (`reminders.fill_from_filing`) fills an empty Due and never replaces one; one not after the Capture moment is a misread and dropped; one already passed is kept and sent at once, but not announced; the Notice carries a Due to announce only when the Item is todo and the Due is ahead. A re-sent Capture's own words (`reminders.request_due`) replace any Due and reopen the Item when the Due is ahead; otherwise, and on any failure after the Item is saved, nothing changes.
 _Avoid_: deadline, remind time, trigger, срок
 
 **Overdue**:
@@ -56,11 +57,12 @@ The Owner's own words sent alongside a Link.
 _Avoid_: note, comment, caption
 
 **Capture**:
-Sending the bot a message that becomes exactly one Item.
+Sending the bot a message that becomes exactly one Item. In code: `notes.capture.capture` takes a *Text* (the Owner's words and the links hidden behind them) or an *Attachment* (a photo, video, document, voice or round video as Telegram describes it) with an *Origin* (the chat and message to acknowledge on, and the Sender), and answers with the Item, its Acknowledgement, its Due line and whether Enrichment starts.
 _Avoid_: save, ingest, submit, forward
 
 **Acknowledgement**:
-The bot's single reaction on the Owner's Capture message, saying whether to wait, nothing to do, or take a look; the bot leaves no message of its own, except one line naming the Due when the Capture became a Reminder.
+The bot's single reaction on the Owner's Capture message, saying whether to wait, nothing to do, or take a look; the bot leaves no message of its own, except the Due line a Notice asks for.
+Three states: *wait* (✍, Enrichment running), *saved* (👌, in notes, a duplicate included), *look* (👎: Capture failed, or Enrichment ended failed). In code `notes.capture.Acknowledgement`; the emoji are the bot's rendering.
 _Avoid_: confirmation, receipt, card, reply, ack (in prose)
 
 **Section**:
@@ -110,6 +112,18 @@ _Avoid_: overview, home, stats, обзор
 **Search**:
 Finding Items in the Mini App by the words in their text fields, across every Section and both Statuses.
 _Avoid_: filter, find, lookup
+
+**Zone**:
+The Owner's IANA time zone, remembered from the Mini App's `tz`; UTC until the app first opens. Every Due is stored in UTC and read in the Zone, and the Dashboard's days are the Zone's.
+_Avoid_: timezone, tz (in prose), offset, locale
+
+**Notice**:
+What the domain tells the interface when Enrichment lands or a Due is decided: the Item as stored, and the Due to name to the Owner when the Item just became a Reminder whose Due is still ahead.
+_Avoid_: event, callback payload, result, flag
+
+**List**:
+A named reading of Items the Mini App shows, with its own scope, order and count: a Section on one Status (`InSection`), «Просрочено» (`Overdue`), Search, or a Recheck of given Items as they are now. A Section is not a List; a List is what a Section shows on one Status.
+_Avoid_: filter, query, view, feed, группа
 
 **Browse**:
 Reading Sections and Items from inside the bot.

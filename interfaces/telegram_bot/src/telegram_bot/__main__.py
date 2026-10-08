@@ -15,8 +15,9 @@ from shared.obs import get_logger
 
 from . import db
 from .access import AccessMiddleware
+from .cards import CardBook, LiveIntake
 from .handlers import setup_routers
-from .handlers.notes import build_runtime as build_notes_runtime
+from .notes_runtime import build_runtime as build_notes_runtime
 from .tracing import init_tracing
 from .worker import JobQueue, worker_loop
 
@@ -65,6 +66,7 @@ async def _run() -> None:
     dp = Dispatcher()
     queue = JobQueue()
     dp["queue"] = queue
+    dp["cards"] = CardBook(intake=LiveIntake())
     # Notes is admin-only (ADR-015): if it cannot start, the bot runs without it and 💾 says so.
     try:
         notes = build_notes_runtime()

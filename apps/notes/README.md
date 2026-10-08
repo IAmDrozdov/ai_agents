@@ -11,16 +11,19 @@ in the admin Mini App (ADR-016). Merged in from the standalone `maxi-notes` repo
 
 | Where | What |
 |---|---|
-| `apps/notes/src/notes/` | domain (`domain/`), sqlite store (`db.py`), Enrichment (`enrich/`), Classifier port (`classify/`), `sweeper.py`, `smoke.py` |
-| `interfaces/telegram_bot/…/handlers/documents.py` | the admin's ask-first card (`admin_input_handler`, 💾 on the price card) |
-| `interfaces/telegram_bot/…/handlers/notes.py` | saving straight away and on 💾, the reactions, background enrichment and the sweeper; 🤖 and ↩️ only for buttons on old messages |
+| `apps/notes/src/notes/` | domain (`domain/`: items, sections, `clock`, `lists`, `reminders`, dashboard), `capture.py` (one message in, one Item out), sqlite store (`db.py`), Enrichment (`enrich/`), Classifier port (`classify/`), `sweeper.py`, `smoke.py` |
+| `interfaces/telegram_bot/…/handlers/documents.py` | the admin's single website link gets a card with 💾 (`link_handler`, a savable Path) |
+| `interfaces/telegram_bot/…/handlers/notes.py` | the Capture Paths (text, file, voice), 💾 on a card, Reminder buttons; 🤖 and ↩️ only for buttons on old messages |
+| `interfaces/telegram_bot/…/notes_capture.py` | the bot's Capture adapter: message → `notes.capture.capture` → reaction, Due line, background Enrichment |
+| `interfaces/telegram_bot/…/notes_runtime.py` | `NotesRuntime`: the Database, Classifier and the background loops (enrichment, sweeper, show, reminders) |
 | `interfaces/telegram_bot/…/notes_ui.py` | Acknowledgement reactions (✍ 👌 👎), "show in chat" and Reminders (the Due line, the reminder) |
 | `interfaces/telegram_bot/…/miniapp/` | the Mini App: notes API and UI (`telegram-miniapp`) |
 
 ## Run
 
 ```bash
-uv run notes-smoke https://youtu.be/dQw4w9WgXcQ   # fetch + file one input, print the result
+uv run notes-smoke https://youtu.be/dQw4w9WgXcQ   # Capture + enrich one input on a throwaway database, print the Item
+uv run notes-smoke --db PATH <url-or-text>        # the same on a database file you keep (it is written to)
 uv run notes-smoke --voice memo.ogg               # transcribe + file a voice file
 uv run notes-smoke --now "2026-10-07 20:58" --zone Europe/Warsaw "напомни завтра"   # prints the Due
 uv run notes-smoke http://169.254.169.254/         # the SSRF guard refuses it

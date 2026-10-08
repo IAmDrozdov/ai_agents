@@ -181,12 +181,6 @@ def list_sections(db: Database) -> list[Section]:
     return [_row_to_section(row) for row in rows]
 
 
-def get_section_by_slug(db: Database, slug: str) -> Section | None:
-    with db.session(readonly=True) as conn:
-        row = conn.execute("SELECT * FROM sections WHERE slug=?", (slug,)).fetchone()
-    return _row_to_section(row) if row else None
-
-
 def status_counts(db: Database, status: str) -> dict[int, int]:
     """Section id -> number of Items in `status` filed under it."""
     with db.session(readonly=True) as conn:
@@ -196,13 +190,6 @@ def status_counts(db: Database, status: str) -> dict[int, int]:
             (status,),
         ).fetchall()
     return {int(row["section_id"]): int(row["n"]) for row in rows}
-
-
-def other_id(db: Database) -> int:
-    other = get_section_by_slug(db, OTHER_SLUG)
-    if other is None:
-        raise RuntimeError("the Other section is missing — was the database initialised?")
-    return other.id
 
 
 def slugify(name: str) -> str:
@@ -314,12 +301,82 @@ def delete_section(db: Database, section_id: int) -> bool:
             return False
         if row["slug"] == OTHER_SLUG:
             raise SectionError("«Остальное» удалить нельзя")
-        other = conn.execute("SELECT id FROM sections WHERE slug=?", (OTHER_SLUG,)).fetchone()
         conn.execute(
             "INSERT INTO item_sections(item_id, section_id) "
             "SELECT item_id, ? FROM item_sections GROUP BY item_id "
             "HAVING COUNT(*) = 1 AND MIN(section_id) = ?",
-            (int(other["id"]), section_id),
+            (_other_id(conn), section_id),
         )
         conn.execute("DELETE FROM sections WHERE id=?", (section_id,))
         return True
+
+
+# --- Filing: which Sections an Item is in (ADR-0002: never none; Other is the fallback) ---
+
+
+def _other_id(conn: sqlite3.Connection) -> int:
+    """Other's id on this connection; RuntimeError if the store was never initialised."""
+    row = conn.execute("SELECT id FROM sections WHERE slug=?", (OTHER_SLUG,)).fetchone()
+    if row is None:
+        raise RuntimeError("the Other section is missing — was the database initialised?")
+    return int(row["id"])
+
+
+def file_in_other(conn: sqlite3.Connection, item_id: int) -> None:
+    """A new Item's Filing: Other, until the Classifier files it (ADR-0006)."""
+    conn.execute(
+        "INSERT INTO item_sections(item_id, section_id) VALUES (?, ?)", (item_id, _other_id(conn))
+    )
+
+
+def refile(conn: sqlite3.Connection, item_id: int, slugs: Sequence[str]) -> None:
+    """Replace the Filing: unknown slugs are dropped; an empty Filing falls back to Other (ADR-0002)."""
+    rows = (
+        conn.execute(
+            f"SELECT id FROM sections WHERE slug IN ({','.join('?' * len(slugs))})", tuple(slugs)
+        ).fetchall()
+        if slugs
+        else []
+    )
+    section_ids = [int(row["id"]) for row in rows] or [_other_id(conn)]
+    conn.execute("DELETE FROM item_sections WHERE item_id=?", (item_id,))
+    conn.executemany(
+        "INSERT INTO item_sections(item_id, section_id) VALUES (?, ?)",
+        [(item_id, section_id) for section_id in section_ids],
+    )
+
+
+def in_other_alone(conn: sqlite3.Connection, item_id: int) -> bool:
+    """Whether the Classifier may still file the Item: it is in Other alone, or in nothing (ADR-0010)."""
+    rows = conn.execute(
+        "SELECT s.slug FROM item_sections x JOIN sections s ON s.id = x.section_id "
+        "WHERE x.item_id=?",
+        (item_id,),
+    ).fetchall()
+    return [row["slug"] for row in rows] in ([], [OTHER_SLUG])
+
+
+def filing_of(conn: sqlite3.Connection, item_id: int) -> tuple[Section, ...]:
+    """The Item's Sections in list order."""
+    rows = conn.execute(
+        "SELECT s.* FROM sections s JOIN item_sections i ON i.section_id = s.id "
+        "WHERE i.item_id=? ORDER BY s.position, s.id",
+        (item_id,),
+    ).fetchall()
+    return tuple(_row_to_section(row) for row in rows)
+
+
+def filings_of(conn: sqlite3.Connection, item_ids: Sequence[int]) -> dict[int, tuple[Section, ...]]:
+    """The Sections of many Items in list order, in one read per 500 ids; an Item with none is absent."""
+    found: dict[int, list[Section]] = {}
+    for start in range(0, len(item_ids), 500):
+        chunk = item_ids[start : start + 500]
+        rows = conn.execute(
+            "SELECT i.item_id, s.* FROM sections s JOIN item_sections i ON i.section_id = s.id "
+            f"WHERE i.item_id IN ({','.join('?' * len(chunk))}) "
+            "ORDER BY i.item_id, s.position, s.id",
+            list(chunk),
+        ).fetchall()
+        for row in rows:
+            found.setdefault(int(row["item_id"]), []).append(_row_to_section(row))
+    return {item_id: tuple(sections) for item_id, sections in found.items()}

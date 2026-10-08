@@ -30,6 +30,15 @@ const STATUSES = [
   ["done", "Готово"],
 ];
 
+// The Lists this tab shows (CONTEXT: List), each with its request. A kept List's snapshot key (ADR-019) is the one
+// earlier builds wrote, so the last launch's list still paints after a deploy; Search and a Recheck are never kept.
+const LISTS = {
+  overdue: () => ({ key: "overdue", params: { overdue: "true" } }),
+  inSection: (slug, status) => ({ key: `group:${slug}:${status}`, params: { section: slug, status } }),
+  search: (q) => ({ params: { q, limit: String(MAX_CHUNK) } }),
+  recheck: (ids) => ({ params: ids.map((id) => ["ids", String(id)]) }),
+};
+
 // `want` items from `offset`, in requests the server accepts, all under `base`: the chunks after the first go at once.
 async function fetchItems(base, offset, want) {
   const chunk = (at, limit) => {
@@ -94,7 +103,7 @@ export async function mountNotes(root, ctx) {
 
   const statusOf = (slug) => state.status.get(slug) || "todo";
   const searching = () => state.results != null && !state.editing;
-  const snapshotKey = (g) => (g === overdue ? "overdue" : `group:${g.slug}:${statusOf(g.slug)}`);
+  const listOf = (g) => (g === overdue ? LISTS.overdue() : LISTS.inSection(g.slug, statusOf(g.slug)));
 
   // --- groups --------------------------------------------------------------
 
@@ -245,7 +254,7 @@ export async function mountNotes(root, ctx) {
     if (!reset && g.loading) return;
     const ticket = ++g.ticket;
     const status = statusOf(g.slug);
-    const key = snapshotKey(g);
+    const { key, params } = listOf(g);
     const kept = reset && !g.loaded ? snapshot(key) : null;
     if (kept) {
       // the last launch's list shows at once; the fresh one replaces it below
@@ -261,8 +270,7 @@ export async function mountNotes(root, ctx) {
       if (ticket === g.ticket) g.list.classList.add("stale");
     };
     const staleTimer = reset && g.items.length && !kept ? setTimeout(dim, STALE_AFTER_MS) : null;
-    const base = g === overdue ? new URLSearchParams({ overdue: "true" }) : new URLSearchParams({ section: g.slug, status });
-    const data = await attempt(() => fetchItems(base, reset ? 0 : g.items.length, want));
+    const data = await attempt(() => fetchItems(params, reset ? 0 : g.items.length, want));
     clearTimeout(staleTimer);
     if (ticket !== g.ticket) return;
     g.list.classList.remove("stale");
@@ -305,7 +313,7 @@ export async function mountNotes(root, ctx) {
   let searchTicket = 0;
   async function runSearch(query) {
     const ticket = ++searchTicket;
-    const data = await attempt(() => api("/notes/items?" + new URLSearchParams({ q: query, limit: MAX_CHUNK })));
+    const data = await attempt(() => api("/notes/items?" + new URLSearchParams(LISTS.search(query).params)));
     if (ticket !== searchTicket || !data || query !== search.value.trim()) return; // what is typed now wins
     if (query !== state.query) state.folded = new Set();
     state.query = query;
@@ -450,6 +458,7 @@ export async function mountNotes(root, ctx) {
     schedulePoll();
   }
 
+  // The page's one copy of InSection and Overdue membership; the Overdue half is the server's verdict (item.overdue).
   const fits = (item, g) =>
     g === overdue ? item.overdue : item.status === statusOf(g.slug) && item.sections.some((s) => s.slug === g.slug);
 
@@ -527,7 +536,7 @@ export async function mountNotes(root, ctx) {
     const gen = localGen;
     let data = null;
     try {
-      data = await api("/notes/items?" + new URLSearchParams(ids.map((id) => ["ids", String(id)])));
+      data = await api("/notes/items?" + new URLSearchParams(LISTS.recheck(ids).params));
     } catch (error) {
       if (error instanceof AuthError) handleError(error); // anything else: the next tick asks again
     } finally {

@@ -33,44 +33,61 @@ A non-YouTube link is scraped into a Markdown `DocumentSource` (`telegram_bot/sc
 then offered to the document agents. Plain text reaches them only as a `.txt` file. Every agent is
 `preview` (free) → `estimate` (free) → `run` (paid).
 
-## Who gets what (routing)
+## Who gets what (the Path)
 
 Updates pass through `AccessMiddleware` first: private chats only, admin or whitelisted users
-only, plus `/start <invite>`. Routers then match in the order set in
-`handlers/__init__.py:setup_routers`, and the first match wins:
+only, plus `/start <invite>`. Commands and callbacks then match their own routers. A plain message
+becomes one **Path**, decided by `routing.route` (a pure function of `routing.Incoming`, built by
+`routing.incoming_of`); each handler takes the Paths it names through `routing.takes(...)`, so
+router order is not part of the rule. One row per `Kind`:
 
-| Router | Message it takes | Who |
-|---|---|---|
-| `start` | `/start`, `/help` (the admin's help adds a notes line) | everyone |
-| `admin` | `/invite`, `/users`, `/revoke` | admin |
-| `notes` | callbacks (`JobCB save`, `NotesCB offer` / `restore` / `done`: a Reminder's ✅ Готово marks the Item done and edits the message to «✅ сделано»); messages saved with no card and acknowledged by a reaction (notes ADR-0007, ADR-0008, ADR-0009): text with no URL, several URLs, or exactly one Instagram / YouTube / TikTok URL (`direct_text_handler`, one Note or Link); a photo, video or non-agent document (`file_handler`); a voice or round video message (`voice_handler`, a Voice, transcribed in Enrichment) | admin |
-| `documents` | an agent document (.pdf .docx .md .markdown .txt) → card; **admin** text with exactly one website URL → card with 💾 (`admin_input_handler`); anyone else's text containing a URL → card (`link_handler`) | all |
-| `settings_menu`, `status` | `/settings`, `/status`, `/cancel` | all |
+| Kind | Message | Who | Taken by |
+|---|---|---|---|
+| `document_card` | an agent document (.pdf .docx .md .markdown .txt) → card, never 💾 | all | `documents.document_handler` |
+| `unsupported_document` | any other document → "Unsupported file type…" | invitee | `documents.document_handler` |
+| `link_card` | text with a URL → card; the admin's single website URL is *savable* (card with 💾) | all (💾: admin) | `documents.link_handler` |
+| `capture_text` | text with no URL, several, or exactly one Instagram / YouTube / TikTok URL → a Note or a Link, no card | admin | `notes.direct_text_handler` |
+| `capture_file` | a photo, video or non-agent document → a File | admin | `notes.file_handler` |
+| `capture_voice` | a voice or round video → a Voice, transcribed in Enrichment | admin | `notes.voice_handler` |
+| `ignore` | everything else: an invitee's plain text or media, a command, a sticker, audio… | — | nothing |
 
-Plain text without a URL from an invitee matches nothing and is ignored.
+Other routers: `start` (`/start`, `/help`; the admin's help adds a notes line), `admin`
+(`/invite`, `/users`, `/revoke`), `settings_menu` and `status` (`/settings`, `/status`, `/cancel`).
+`notes` also takes the callbacks `JobCB save`, `NotesCB offer` / `restore` / `done` (a Reminder's
+✅ Готово marks the Item done and edits the message to «✅ сделано»). Router order still matters
+for commands that carry text (`/settings https://x`, `/help https://x`) and for
+`MenuCB(page='job')`, which `documents` claims.
+
+Plain text without a URL from an invitee is `ignore`.
 
 Callback-data prefixes (`keyboards.py`, `notes_ui.py`, max 64 bytes): `m` menu, `o` option
 picker, `s` set value, `t` try voice/model, `j` job actions (`run`/`settings`/`cancel`/`save`),
 `n` notes item actions (`offer`/`restore`/`done`). Pick a new letter for a new family.
 
-## The card lifecycle (`handlers/documents.py`)
+## The card lifecycle (`telegram_bot/cards.py`, handlers in `handlers/documents.py`)
 
-1. **Open.** An answer is sent at once: a status line, with `[💾 В заметки] [✖️ Cancel]` for the
-   admin. That message becomes the card; `_live[chat]` points at it.
+`CardBook` (`dp["cards"]`) owns every chat's card state; handlers call it and never touch its
+dicts. It takes an `Intake` port (`scrape`, `preview`): `LiveIntake` in production, a stub in the
+offline harness.
+
+1. **Open.** An answer is sent at once: a status line, with `[💾 В заметки] [✖️ Cancel]` for a
+   savable card. That message becomes the card, *live* for its chat.
 2. **Intake.** Scrape, parse, preview and estimate run on a 2-thread `_INTAKE_EXECUTOR`, one per
    user, with a 120 s timeout.
-3. **Card.** The status line is edited into the card: 💾 (admin), one priced button per agent,
-   then ⚙️ Settings and ✖️ Cancel. The job sits in `pending[chat]`, **one per chat**.
+3. **Card.** The status line is edited into the card, *priced*: 💾 (savable), one priced button
+   per agent, then ⚙️ Settings and ✖️ Cancel. The job sits in the book's pending map, **one per
+   chat**.
 4. **Outcome:**
-   - **Run** puts a `Job` on the FIFO `JobQueue` (max 5 per user, one running at a time). The
-     worker edits the card with progress and delivers files or voice messages.
-   - **Cancel** closes the card.
-   - **💾** saves one Item, deletes the card and reacts on the admin's original message.
+   - **Run** (*job*) puts a `Job` on the FIFO `JobQueue` (max 5 per user, one running at a time).
+     The worker edits the card with progress and delivers files or voice messages.
+   - **Cancel** *closes* the card.
+   - **💾** takes the card's savable (a `notes_capture.Draft`), saves one Item, deletes the card
+     and reacts on the admin's original message; a failed save gives the savable back.
    - **Settings → Back** re-prices the same card.
 
-Guards: only the card's own `pending` item can be run, cancelled or reopened. A card closed
-while it was still pricing is never overwritten. A card superseded by a newer message is edited
-to "⏭ Replaced…" and keeps 💾.
+Guards: only a card that owns the chat's pending job can be run, re-priced or sent to
+Settings. A card closed while it was still pricing is never overwritten. A card *superseded* by a
+newer message is edited to "⏭ Replaced…" if it was still pricing, and keeps 💾.
 
 Spend gates (`_spend_block_reason`): a per-job cap (`BOT_MAX_JOB_COST_USD`) applies to everyone,
 including the admin. The rolling 24 h cap (`BOT_DAILY_USER_COST_LIMIT_USD`) applies to everyone
@@ -78,10 +95,13 @@ except the admin.
 
 ## Notes path (`apps/notes`, ADR-015)
 
-Text (`direct_text_handler`) and 💾 on a card (`save_handler` → `documents.take_draft`) go
-through `_capture_draft`: one Item per Capture, `capture_link` with dedupe for exactly one URL,
-else `capture_note` with the whole text. Files and voice (`file_handler`, `voice_handler`) go
-through `capture_file` / `capture_voice`. Then `enrich_later` → `notes.enrich.pipeline.enrich_item`. The bot sends no message of its own (a Reminder is the exception): the Acknowledgement
+The three Capture Paths (`direct_text_handler`, `file_handler`, `voice_handler`) call
+`notes_capture.capture_message`; 💾 on a card (`save_handler`) takes the card's `Draft` from the
+card book. Both reach `notes.capture.capture` (a `Text` or an `Attachment` with an `Origin`): one
+Item per Capture, `capture_link` with dedupe for exactly one URL, else a Note with the whole text,
+a File or a Voice. `notes_capture.settle` then shows what the Capture decided (the Due line, the
+reaction) and `NotesRuntime.enrich_later` (`telegram_bot/notes_runtime.py`) starts
+`notes.enrich.pipeline.enrich_item`. The bot sends no message of its own (a Reminder is the exception): the Acknowledgement
 is its one reaction on the admin's message (`notes_ui.react`): ✍ working, 👌 in notes, 👎 take a
 look (notes ADR-0009). A duplicate gets 👌 at once with no Enrichment (👎 if its Enrichment had
 failed), and keeps its Status, `done` included, unless its own words ask for a reminder (below). A
@@ -95,10 +115,11 @@ Capture that throws, or notes being down, gets 👎. The bot writes a message fo
 2. The Classifier (`NOTES_CLASSIFIER_PROVIDER`: `openai`, or `fake` offline) chooses the
    Sections, the Russian Gist and the title, and reads a Due when the text asks to be reminded.
    It is told the Capture moment in the Owner's zone; the fake reads «напомни YYYY-MM-DD HH:MM».
-3. `store_enrichment` saves the result (a Due fills an empty Due only, and one not after the
-   Capture moment is dropped), and `notify` (`NotesRuntime.notify_for`) sets the reaction from
-   `enrichment_status` on `tg_message_id`; when Enrichment filled a Due that is still ahead it also
-   replies to the Capture with «⏰ пт, 10 окт, 19:00» and a web_app `📅 Перенести`.
+3. `store_enrichment` saves the result and `reminders.fill_from_filing` decides the Due (it fills an
+   empty Due only, and one not after the Capture moment is dropped). It returns a `Notice`, and
+   `notify(notice)` (`NotesRuntime.notify_for`) sets the reaction from `enrichment_status` on
+   `tg_message_id`; when the Notice carries a Due (Enrichment filled one that is still ahead) the bot
+   also replies to the Capture with «⏰ пт, 10 окт, 19:00» and a web_app `📅 Перенести`.
 
 Failures go to `schedule_retry` (backoff 1 min → 12 h, then `failed`). The sweeper
 (`NOTES_ENRICH_SWEEP_SECONDS`) retries anything due and anything a restart interrupted; a retry
@@ -109,15 +130,16 @@ handlers stay only for buttons on old Acknowledgement messages: 🤖 still works
 itself (notes ADR-0010); `done` is current (Reminders, below).
 
 **Reminders (notes ADR-0011).** An Item with a Due (`due_at`, UTC) is a Reminder.
-`NotesRuntime.start_reminder_loop` runs `remind_once` every 30 s: `claim_due_reminders` marks
+`NotesRuntime.start_reminder_loop` runs `remind_once` every 30 s: `reminders.claim_due` marks
 `reminded_at` and returns the todo Items whose Due has come in one `UPDATE … RETURNING`, so each goes
 out once, and the bot replies to the Item's Capture message with `✅ Готово` (`NotesCB done`) and
 `📅 Перенести` (a web_app to `/?item=<id>`); if the original is gone it sends a message naming the Item
 instead, and a network error hands the claim back for the next pass. Moving or removing a Due clears
 `reminded_at`; back to `todo` after the Due sets it, so nothing fires late. A re-sent Link whose words
-ask for a reminder goes through `Classifier.due`, and the saved Item gets the Due and reopens. The
-Owner's zone is the Mini App's last `tz` (a `settings` row, UTC until the app first opens). Overdue
-(todo, Due passed) is read off the clock and never stored.
+ask for a reminder goes through `reminders.request_due` (`Classifier.due`), and the saved Item gets the
+Due and reopens; it never fails a Capture that is already saved. The Owner's Zone is the Mini App's
+last `tz` (`clock.owner_zone`, UTC until the app first opens; every Due is stored in UTC). Overdue
+(todo, Due passed; `reminders.is_overdue`) is read off the clock and never stored.
 
 Language: the bot UI is English; notes texts and the Mini App are Russian.
 
@@ -144,8 +166,10 @@ Funnel costs 250–450 ms a request, so the app is built to need few requests (A
   bar per Section with todo Items (`todo_count` from `/api/notes/sections`). A bar is tappable: it
   opens Заметки with that Section expanded on «Сделать»; so is «просрочено: N», which opens the
   «Просрочено» row. The request's `tz` is also stored as the Owner's zone.
-- **Заметки** starts with a «⏰ Просрочено» row when something is Overdue
-  (`/api/notes/items?overdue=true`, every Section, todo only, earliest Due first; collapsed on
+- **Заметки** reads Items through `/api/notes/items`, one `notes.domain.lists` List per request:
+  `InSection` (`section`, `status`), `Overdue` (`overdue=true`), `Search` (`q`) and `Recheck` (`ids`).
+  It starts with a «⏰ Просрочено» row when something is Overdue
+  (every Section, todo only, earliest Due first; collapsed on
   launch, no switch, hidden in Search and edit mode). It lists every Section in the Owner's order as a
   collapsed accordion. A header shows the
   count for that Section's own «Сделать» | «Готово» switch (`todo_count` / `done_count`, one Status
@@ -179,8 +203,8 @@ the work. Edits made in the app do not change the reaction in the chat.
 ## State that lives only in memory
 
 These are lost on every restart, and a deploy is a restart:
-- `pending` cards: TTL 30 min, 60 MB cap.
-- `drafts` and `_live`/`_closed`.
+- The card book (`dp["cards"]`): pending cards (TTL 30 min, 60 MB cap), savables (the admin's
+  Drafts), and the live/closed marks.
 - The job queue.
 
 After a restart, old buttons answer "expired", and a job left running is marked `interrupted`
@@ -207,7 +231,7 @@ up anything left `pending` from sqlite.
   - the health wait in `deploy.sh`.
   Workspace packages are installed editable, so templates and static files are served from
   `/app/<path>` rather than site-packages.
-- **A router or filter:** the order in `setup_routers`. Keep `start` first, and keep each
+- **A router, filter or Path:** a new message kind is a `Kind` in `telegram_bot/routing.py` plus a handler that `takes` it; the order in `setup_routers` only matters for commands and `MenuCB`. Keep `start` first, and keep each
   router's `allowed_user_filter`.
 - **A new agent:** `.skills/create-workflow.md`. It appears on cards through
   `telegram_bot/registry.py`; there are no id switches.
