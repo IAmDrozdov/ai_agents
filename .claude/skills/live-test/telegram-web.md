@@ -17,6 +17,8 @@ bot chat's URL) live in `CLAUDE.local.md`, which is gitignored because this repo
 - One tab per run. Start with a single `list_pages`: it fails fast when the DevTools attach is
   down, where `new_page` hangs for its full timeout; then drive the run with the `claude-in-chrome`
   tools instead (`browser_batch` chains several actions in one call) and say so in the result.
+  Give `list_pages` two minutes at most (it once hung for 30). `claude-in-chrome` clicks do not
+  register inside the Mini App iframe, so without the attach a Mini App case is `BLOCKED`.
   Otherwise open the bot chat once with `new_page`, keep its page id, and reload with
   `evaluate_script(() => location.reload())`: every `list_pages`, `new_page`, `select_page` or
   `close_page` prints all of the owner's open tabs (3.5-4.6k tokens).
@@ -25,9 +27,9 @@ bot chat's URL) live in `CLAUDE.local.md`, which is gitignored because this repo
   `python3 .claude/skills/live-test/snap.py iframe <file> [regex]` (the Mini App subtree) or
   `snap.py grep <file> <regex>` (the whole page), or `snap.py uid <file> <regex>` for just the
   `uid label` pairs to click: uids included, URLs masked, output capped. Delete
-  the named file afterwards. Do not wait with `wait_for`: it returns the whole snapshot inline, and
-  with the Mini App open that includes the iframe `src` with its `tgWebAppData`. Poll with
-  `take_snapshot` and `filePath` instead.
+  the named file afterwards. Do not wait with `wait_for`, and never pass `includeSnapshot` on this
+  tab: both return the whole snapshot inline, and with the Mini App open that includes the iframe
+  `src` with its `tgWebAppData`. Poll with `take_snapshot` and `filePath` instead.
 - Every snapshot excerpt, screenshot (~1.6k tokens) and log line stays in context for the rest of
   the run and is re-read on each later call. Screenshot only a case's checkpoint, keep evidence as
   file paths, and read an image back only when the case needs a visual judgement.
@@ -37,9 +39,15 @@ bot chat's URL) live in `CLAUDE.local.md`, which is gitignored because this repo
   pick the bot's chat. The forwarded copy reaches the bot with `forward_origin` set.
 - The Mini App opens in an iframe modal, and the snapshot exposes its own controls, so `click` and
   `fill` work in place. Telegram's native confirm shows as a parent dialog with OK / CANCEL; its back
-  button and main button («✓ Готово» on the Item view, ADR-021) are parent-page controls too. The
-  modal remembers a collapsed state: expand it, or reload the tab. Screenshot the app with
-  `take_screenshot` on the iframe's uid (a full-page shot shows the owner's chat list).
+  button and main button («✓ Готово» on the Item view, ADR-021) are parent-page controls too, and
+  those two ignore a uid `click`: dispatch `pointerdown`, `mousedown`, `pointerup`, `mouseup`,
+  `click` on them from `evaluate_script`. The modal can collapse to a zero-height sliver (uids turn
+  "not interactive") and remembers that state: the same event sequence on its expand button brings
+  it back in fullscreen, or reload the tab and reopen the app, which remembers its Place. An icon
+  button shows in a snapshot under its `aria-label` («Ещё» for «⋮», «Изменить» for «✏️»), and the
+  Place menu and the list of Sections show outside the iframe subtree: find them with
+  `snap.py uid`, not `snap.py iframe`. Screenshot
+  the app with `take_screenshot` on the iframe's uid (a full-page shot shows the owner's chat list).
 - To drive the app top-level (a plain tab, easier to script), read the iframe `src` with
   `evaluate_script` (`snap.py` masks it in snapshots) and open it in a new tab; its `tgWebAppData`
   hash is the credential from the guardrails.

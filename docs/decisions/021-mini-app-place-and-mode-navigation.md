@@ -1,6 +1,6 @@
 # ADR-021: The Mini App navigates by Place and Mode, and an Item is closed from the list
 
-Status: Proposed (2026-10-10). Supersedes ADR-020 decision 4 (tabs, the toggle, opening on the Dashboard); amends ADR-016 (decision 5: what a launch opens) and ADR-019 (decision 3: the phone also keeps the navigation memory).
+Status: Accepted (2026-10-10). Supersedes ADR-020 decision 4 (tabs, the toggle, opening on the Dashboard); amends ADR-016 (decision 5: what a launch opens) and ADR-019 (decision 3: the phone also keeps the navigation memory).
 
 ## Context
 
