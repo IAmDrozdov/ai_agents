@@ -34,7 +34,7 @@ paste or print it. It expires after 24 h (`auth_date`); run `up` again then. The
 
 ```bash
 T=$(mktemp -d); SECRET=$(python3 -c 'import hashlib,hmac;print(hmac.new(b"WebAppData",b"42:TEST",hashlib.sha256).hexdigest())')
-ADMIN_TELEGRAM_ID=100 TELEGRAM_DB_PATH=$T/b.sqlite3 NOTES_DB_PATH=$T/n.sqlite3 MINIAPP_INIT_SECRET=$SECRET \
+ADMIN_TELEGRAM_ID=100 TELEGRAM_DB_PATH=$T/b.sqlite3 NOTES_DB_PATH=$T/n.sqlite3 DIARY_DB_PATH=$T/d.sqlite3 MINIAPP_INIT_SECRET=$SECRET \
   uv run telegram-miniapp --port 18083
 ```
 
@@ -43,11 +43,16 @@ sorted `key=value` lines (every field except `hash`, `signature` included); set 
 now and `user` to `{"id":100,...}`. Then check `/api/usage`: no header → 401, admin → 200, another
 user id → 403, a tampered `hash` → 401, an `auth_date` 25 h old → 401. To see the pages, open
 `http://127.0.0.1:18083/#tgWebAppData=<url-encoded initData>&tgWebAppVersion=8.0&tgWebAppPlatform=web`
-(`telegram-web-app.js` reads the hash; the app has no auth bypass). Use an isolated browser
+(`telegram-web-app.js` reads the hash; the app has no auth bypass). A plain browser has none of
+Telegram's own controls, so press them from the console: `Telegram.WebView.receiveEvent("back_button_pressed", {})`
+leaves a nested screen, `"main_button_pressed"` is «✓ Готово» on the Item view, and
+`("popup_closed", { button_id: "ok" })` answers a confirm; `tgWebAppVersion=6.0` shows the shell's own
+«← Назад». Use an isolated browser
 context and device emulation for a phone viewport; do not resize the owner's window. A layout
-change is not done until, at 320 and 393 px, every tab has `scrollWidth == clientWidth`, every
+change is not done until, at 320, 393 and 400 px (the last is Telegram for macOS), every Place, Mode and
+nested screen has `scrollWidth == clientWidth`, every
 form control computes to at least 16 px, and a `PerformanceObserver` on `layout-shift` reads 0
-while a chip, filter or status is tapped.
+while a rail button, a chip or «✓» is tapped on a list that is already loaded.
 
 Signed-curl List checks (one `notes.domain.lists` List per request; seed with `miniapp_local.py up`):
 - `GET /api/notes/items?section=<id>&status=todo` → that Section's todo Items, newest first, with `total`;
@@ -72,13 +77,19 @@ Signed-curl diary checks (`/api/diary/*`, ADR-020; a fresh server, entries made 
   most recent;
 - `/suggestions?prefix=Тр` → matching texts in any case, most frequent first; no prefix → the top five.
 
-On the screen (the 🧪 seed): the top row is «Заметки», «Дневник», ⚙️ and a launch shows the notes
-Dashboard; a Section bar and «просрочено» switch the notes toggle to the Items view; `/?item=<id>`
-opens that Item; «Дневник» → its Dashboard → a Day on the map opens its Week in «Записи»; «Добавить
-запись» opens today's editor with five suggestion chips; tapping 🔥 twice sets and clears the Mark;
-«+» moves an Entry into «Итоги недели»; the Month chip opens the Month, whose «+» moves a candidate
-into its Summary; ⚙️ and «← Назад» return to the tab and view left. With `/api/diary/*` held back,
-a warm reload still paints the diary Dashboard and the Week from the snapshot.
+On the screen (the 🧪 seed): a first launch reads «Заметки · записи ▾» with the Section rail and one
+Section's rows; the place menu reaches both Modes of both Places and «⚙️ Расходы» in two clicks; a reload
+reopens the Place, Mode and Section left and keeps the rail hidden if it was; a launch on the diary still
+stores the zone; a Section bar and «просрочено» on the notes Dashboard open «записи» on that Section;
+`/?item=<id>` opens that Item whatever is remembered. In a row, «⋮», a right click and a long press open
+the same menu; «✓ Готово» there, or a swipe to the left, takes the row away at once, sends one `PATCH` and
+offers «↩ Вернуть» for 4 s; «✓» on the rail shows the «Готово» list. On the Item view the main button closes
+the Item and returns to the list. «Дневник · записи» opens on today's editor with five suggestion chips;
+tapping 🔥 twice sets and clears the Mark; «Неделя ›» opens the Week, where «+» moves an Entry into «Итоги
+недели» and the Month chip opens the Month, whose «+» moves a candidate into its Summary; a Day on the diary
+Dashboard opens its Week; the back button returns from «Расходы» to the Place and Mode left. With
+`/api/diary/*` held back, a warm reload still paints the diary Dashboard, today's editor and the Week from
+the snapshot.
 
 The build hash is computed at startup, so restart the server after editing a static file
 (ADR-019). To see the request waterfall the way the phone does, turn on the MCP's "Fast 3G" (about

@@ -129,7 +129,7 @@ def remove_section(section_id: int, db: DbDep) -> None:
 def get_dashboard(
     db: DbDep, tz: Annotated[str | None, Query(max_length=64)] = None
 ) -> dict[str, Any]:
-    # every launch opens the Dashboard: the Owner's zone is learnt here
+    # the app asks this on every launch, whatever it opens: the Owner's zone is learnt here
     if tz:
         clock.remember_zone(db, tz)
     board = dashboard_read.dashboard(db, tz or "UTC")
@@ -183,7 +183,7 @@ def get_item(item_id: int, db: DbDep) -> dict[str, Any]:
 
 @router.get("/items/{item_id}/thumb")
 def get_item_thumb(item_id: int, request: Request, db: DbDep) -> Response:
-    """The card picture; its URL carries the etag (`?v=`), so the webview keeps it for good."""
+    """The row picture; its URL carries the etag (`?v=`), so the webview keeps it for good."""
     thumb = items.get_thumb(db, item_id)
     if thumb is None:
         raise HTTPException(status_code=404, detail="No thumbnail")
@@ -207,7 +207,7 @@ def reenrich(item_id: int, db: DbDep) -> dict[str, Any]:
 
 @router.post("/items/{item_id}/show")
 def show_in_chat(item_id: int, db: DbDep) -> dict[str, Any]:
-    """Queue "Показать в чате": the bot's show loop replies to the original message (ADR-0008)."""
+    """Queue «Открыть в чате»: the bot's show loop replies to the original message (ADR-0008)."""
     item = _found(items.get_item(db, item_id))
     if item.tg_chat_id is None or item.tg_message_id is None:
         raise HTTPException(status_code=409, detail="No original message to show")

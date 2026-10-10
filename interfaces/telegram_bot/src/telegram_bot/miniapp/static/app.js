@@ -1,43 +1,55 @@
-// Entry: checks the Telegram launch, then draws the app tabs and ⚙️ (ADR-020). A tab is mounted once per launch and
-// keeps its state while another is shown; «Расходы» opens over the tabs and Telegram's back button returns.
+// Entry: checks the Telegram launch, then draws the top bar and the place the Owner left on (ADR-021). A view is
+// mounted once per launch and keeps its state while another shows; «Расходы» and every nested screen open without
+// the bar, and Telegram's back button returns.
 
 import { OVERDUE } from "./cards.js";
-import { el, handleError, isHalted, loadSnapshots, prepareShell, setBack, showMessage, tg } from "./core.js";
+import {
+  el,
+  handleError,
+  hideMainButton,
+  isHalted,
+  loadStored,
+  prefs,
+  prepareShell,
+  savePrefs,
+  setBack,
+  showMessage,
+  tg,
+} from "./core.js";
 import { mountDashboard, reportZone } from "./dashboard.js";
 import { mountDiaryBoard } from "./diaryboard.js";
-import { mountWeek } from "./diary.js";
+import { mountToday } from "./diary.js";
+import { closeMenu, mountTopbar } from "./nav.js";
 import { mountNotes } from "./notes.js";
-import { mountToggled } from "./toggled.js";
 import { mountUsage } from "./usage.js";
 
-// One tab per app, each opening on its Dashboard; `views` are the two sides of its toggle.
-const TABS = [
+// Every place has the same two modes: its working view and its Dashboard.
+const MODES = [
+  { id: "list", label: "Записи", word: "записи" },
+  { id: "board", label: "Дашборд", word: "дашборд" },
+];
+const PLACES = [
   {
     id: "notes",
     label: "Заметки",
-    views: [
-      {
-        id: "dashboard",
-        label: "Дашборд",
-        mount: (pane, ctx) =>
-          mountDashboard(pane, {
-            ...ctx,
-            openSection: (slug) => ctx.open("items", { expand: slug }),
-            openOverdue: () => ctx.open("items", { expand: OVERDUE }),
-          }),
-      },
-      { id: "items", label: "Заметки", mount: mountNotes },
-    ],
+    mount: {
+      list: mountNotes,
+      board: (pane, ctx) =>
+        mountDashboard(pane, {
+          ...ctx,
+          openSection: (slug) => ctx.open("list", { section: slug }),
+          openOverdue: () => ctx.open("list", { section: OVERDUE }),
+        }),
+    },
   },
-  {
-    id: "diary",
-    label: "Дневник",
-    views: [
-      { id: "dashboard", label: "Дашборд", mount: mountDiaryBoard },
-      { id: "week", label: "Записи", mount: mountWeek },
-    ],
-  },
+  { id: "diary", label: "Дневник", mount: { list: mountToday, board: mountDiaryBoard } },
 ];
+
+// The mode a place opens in: the one the Owner left it in, the working view on a first launch.
+const modeOf = (place) => {
+  const kept = prefs().mode?.[place];
+  return MODES.some((mode) => mode.id === kept) ? kept : MODES[0].id;
+};
 
 async function boot() {
   if (!tg?.initData) {
@@ -46,50 +58,83 @@ async function boot() {
   }
   prepareShell();
 
-  const tabs = document.getElementById("tabs");
+  const bar = document.getElementById("topbar");
   const view = document.getElementById("view");
   view.replaceChildren(el("p", "empty", "Загрузка…"));
 
-  const views = new Map(); // tab id -> { pane, ready: Promise<{ show, shown?, hide }>, ctl once mounted }
-  let current = null; // the tab or "usage" the Owner asked for last
-  let onScreen = null; // the tab whose pane is showing
-  let lastTab = TABS[0].id;
+  const views = new Map(); // "place:mode" -> { place, mode, pane, ready, ctl once mounted, bar: the view's own actions }
+  let current = null; // the view or "usage" the Owner asked for last
+  let onScreen = null; // the view whose pane is showing
+  let barKey = null; // the view whose title row is drawn
+  let last = null; // { place, mode } asked for last: «Расходы» returns to it
   let ticket = 0;
 
+  const topbar = mountTopbar(bar, {
+    places: PLACES,
+    modes: MODES,
+    remembered: modeOf,
+    go: (place, mode) => select(place, mode, undefined, true),
+    usage: openUsage,
+  });
+  function paintBar(entry) {
+    barKey = `${entry.place}:${entry.mode}`;
+    topbar.set({ place: entry.place, mode: entry.mode, ...entry.bar });
+  }
 
-  // Runs before the next view is swapped in: hide() may close an overlay, which resets the back button and scroll.
+  // Runs before the next view is swapped in: hide() may close a nested screen, which resets the back button and scroll.
   function leave() {
     const shownBefore = onScreen && views.get(onScreen);
     onScreen = null;
+    closeMenu(); // one opened while the next view was loading belongs to the view that goes
     shownBefore?.ctl?.hide();
   }
 
-  // A view is filled while the previous one stays on screen, then swapped in once: the page never goes blank.
-  async function select(id, arg) {
-    const mine = ++ticket;
-    current = id;
-    lastTab = id;
-    let entry = views.get(id);
+  function entryOf(place, mode) {
+    const key = `${place}:${mode}`;
+    let entry = views.get(key);
     if (!entry) {
-      const pane = el("div", "pane");
-      const tab = TABS.find((t) => t.id === id);
-      entry = { pane, ready: mountToggled(pane, { isCurrent: () => current === id }, tab.views) };
-      views.set(id, entry);
-      entry.ready.catch(() => views.delete(id)); // a failed mount is tried again on the next tap
+      entry = { place, mode, pane: el("div", "pane"), bar: {} };
+      const ctx = {
+        isCurrent: () => current === key,
+        // A cross-link inside the place, e.g. a Section bar on the Dashboard opening the list.
+        open: (to, arg) => select(place, to, arg, true),
+        // The view's own part of the top bar: { left, right, replace } (nav.js mountTopbar).
+        setBar: (parts) => {
+          entry.bar = parts;
+          if (barKey === key) paintBar(entry);
+        },
+      };
+      entry.ready = PLACES.find((p) => p.id === place).mount[mode](entry.pane, ctx);
+      views.set(key, entry);
+      entry.ready.catch(() => views.delete(key)); // a failed mount is tried again on the next tap
     }
+    return entry;
+  }
+
+  // A view is filled while the previous one stays on screen, then swapped in once: the page never goes blank.
+  // `remember` writes the navigation memory: the Owner's own moves do, a launch and the way back from «Расходы» do not.
+  async function select(place, mode, arg, remember = false) {
+    const mine = ++ticket;
+    const key = `${place}:${mode}`;
+    current = key;
+    last = { place, mode };
+    closeMenu();
+    const entry = entryOf(place, mode);
     try {
       const ctl = await entry.ready;
       entry.ctl = ctl;
       await ctl.show(arg);
       if (mine !== ticket || isHalted()) return;
-      if (onScreen === id) return; // the tab already showing just reloaded; an open item view stays
-      leave();
-      for (const button of tabs.querySelectorAll(".tab")) button.classList.toggle("on", button.dataset.tab === id);
-      tabs.hidden = false;
-      setBack(null);
-      view.replaceChildren(entry.pane);
-      onScreen = id;
-      window.scrollTo(0, 0);
+      if (remember) savePrefs({ place, mode: { [place]: mode } });
+      if (onScreen !== key) {
+        leave();
+        setBack(null);
+        hideMainButton();
+        paintBar(entry);
+        view.replaceChildren(entry.pane);
+        onScreen = key;
+        window.scrollTo(0, 0);
+      }
       ctl.shown?.();
     } catch (error) {
       handleError(error);
@@ -99,44 +144,32 @@ async function boot() {
   function openUsage() {
     const mine = ++ticket;
     current = "usage";
-    const back = () => select(lastTab);
-    const closeButton = el("button", "btn small ghost", "← Назад");
-    closeButton.onclick = back;
-    const body = el("div");
+    const back = () => select(last.place, last.mode);
+    closeMenu();
     const pane = el("div", "pane");
-    pane.append(closeButton, body);
-    mountUsage(body)
+    mountUsage(pane)
       .catch(handleError)
       .finally(() => {
         if (mine !== ticket || isHalted()) return;
         leave();
-        tabs.hidden = true;
+        hideMainButton();
         view.replaceChildren(pane);
         window.scrollTo(0, 0);
         setBack(back);
       });
   }
 
-  for (const tab of TABS) {
-    const button = el("button", "tab", tab.label);
-    button.dataset.tab = tab.id;
-    button.onclick = () => select(tab.id);
-    tabs.append(button);
-  }
-  const gear = el("button", "tab gear", "⚙️");
-  gear.setAttribute("aria-label", "Расходы");
-  gear.onclick = openUsage;
-  tabs.append(gear);
+  await loadStored(); // the last launch's answers and where the Owner was: the first view paints from them
 
-  await loadSnapshots(); // the last launch's answers: the first tab paints from them, then revalidates
-
-  // The ✏️ Открыть button in the chat launches the app with ?item=<id>.
+  // The 📅 Перенести button in the chat launches the app with ?item=<id>: that Item over the list, whatever is remembered.
   const item = new URLSearchParams(location.search).get("item");
-  if (item && /^\d+$/.test(item)) {
-    reportZone();
-    select("notes", { view: "items", itemId: item });
-  }
-  else select(TABS[0].id);
+  const asked = item && /^\d+$/.test(item);
+  const place = !asked && PLACES.some((p) => p.id === prefs().place) ? prefs().place : PLACES[0].id;
+  const mode = asked ? MODES[0].id : modeOf(place);
+  if (!(place === "notes" && mode === "board")) reportZone(); // the notes Dashboard tells the server the zone itself
+  paintBar(entryOf(place, mode)); // the title row stands before the first answer: a slow link still shows where this is
+  setBack(null);
+  select(place, mode, asked ? { itemId: item } : undefined);
 }
 
 boot();

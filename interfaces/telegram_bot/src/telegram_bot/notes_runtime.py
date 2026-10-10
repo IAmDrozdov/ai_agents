@@ -87,7 +87,7 @@ class NotesRuntime:
         self.spawn(self._show_loop(bot))
 
     async def _show_loop(self, bot: Bot) -> None:
-        """Serve the Mini App's "Показать в чате" requests; the database is the queue (ADR-0008)."""
+        """Serve the Mini App's «Открыть в чате» requests; the database is the queue (ADR-0008)."""
         while True:
             try:
                 for item in await asyncio.to_thread(items.claim_show_requests, self.db):

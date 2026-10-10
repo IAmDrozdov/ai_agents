@@ -1,10 +1,26 @@
-// Записи: the Week (seven Days with Marks, Entries and the Week's Summary), the Day editor, and the Month and Year
-// screens where Entries are raised further. Vocabulary: apps/diary/CONTEXT.md; rules: ADR-020.
+// Дневник · записи: today's Day editor at the root (ADR-021), and nested under it the Week (seven Days with Marks,
+// Entries and the Week's Summary), another Day's editor, and the Month and Year screens where Entries are raised
+// further. Vocabulary: apps/diary/CONTEXT.md; rules: ADR-020.
 
-import { api, attempt, el, handleError, haptic, keepSnapshot, resetSlot, setBack, slot, snapshot, toast } from "./core.js";
+import {
+  api,
+  attempt,
+  el,
+  handleError,
+  haptic,
+  keepSnapshot,
+  plural,
+  resetSlot,
+  setBack,
+  slot,
+  snapshot,
+  tg,
+  toast,
+} from "./core.js";
 import { TIMEZONE, addDays, fmtDay, parseDay } from "./dashboard.js";
 
 export const MARK_EMOJI = { dead: "💀", meh: "😐", fire: "🔥" };
+const MARK_NAMES = { dead: "Плохой день", meh: "Обычный день", fire: "Отличный день" };
 const MARKS = ["dead", "meh", "fire"];
 const LEVELS = ["day", "week", "month", "year"];
 const LEVEL_LABEL = { week: "неделя", month: "месяц", year: "год" };
@@ -57,12 +73,8 @@ const longDay = (iso) =>
 const capital = (text) => text.charAt(0).toUpperCase() + text.slice(1);
 const stepOf = (level, by) => LEVELS[LEVELS.indexOf(level) + by];
 
-// «Добавить запись» on both sides of the diary's toggle: today's Day editor.
-export function addEntryButton(ctx) {
-  const button = el("button", "btn wide diary-add", "+ Добавить запись");
-  button.onclick = () => ctx.open("week", { edit: todayIso() });
-  return button;
-}
+// A keyboard at hand: the «Что сделано» field takes the focus by itself. On a phone that would raise the keyboard.
+const wantsFocus = () => matchMedia("(pointer: fine)").matches || ["macos", "tdesktop"].includes(tg.platform);
 
 // [] at day Level, so it spreads into a row.
 function levelTag(level) {
@@ -81,26 +93,44 @@ function summaryRow(entry, symbol, onStep) {
   return row;
 }
 
-// ctx.open(view, arg) switches the toggle; ctx.isCurrent() is false while another tab or view shows.
-// Returns { show(arg), shown(), hide() }; arg: { day } opens that Day's Week, { edit: day } its Day editor too.
-export async function mountWeek(root, ctx) {
+// ctx.isCurrent() is false while another view shows; ctx.setBar() sets this view's part of the title row.
+// Returns { show(arg), shown(), hide() }; arg: { day } opens that Day's Week over today's editor.
+export async function mountToday(root, ctx) {
   const state = {
-    anchor: todayIso(), // any Day of the Week on screen
+    rootDay: todayIso(), // the Day the root editor is for
+    now: null, // the current Week, { start, days, summary }: what the root editor and the week line read
+    anchor: todayIso(), // any Day of the Week on the Week screen
     today: todayIso(), // «today» when the Week was last read: once the Day turns, the current Week follows it
-    week: null, // { start, days, summary } as last read or written
+    week: null, // the Week on the Week screen; the same object as `now` while that is the current one
     top: snapshot("diary-top") ?? [], // the five most frequent Entry texts
-    screens: [], // the open Day editor / Month / Year, the top one last
+    screens: [], // the open Week / Day editor / Month / Year, the top one last
     after: null, // what shown() does once the pane is on screen
   };
+  let rootEditor = null;
+  let todayTicket = 0;
   let ticket = 0;
   let writes = Promise.resolve(); // writes go one at a time, so their answers land in the order they were made
   let pending = 0; // writes not yet answered: a read meanwhile could undo one on screen
+  let written = 0; // writes answered so far: a read that began before one of them is as old
+  let missed = false; // a read was dropped, or a write failed: everything on screen is read again after the writes
+  let todayRead = null; // the current Week on its way, for a Week screen that wants the same one
+  const levels = new Map(); // Entry id -> { level } shown and not yet answered: it stays over a Day that lands first
+  let shows = 0;
 
-  const main = el("div");
+  const main = el("div", "diary-today"); // the root: today's editor and the week line
   const host = el("div");
   host.hidden = true;
   root.replaceChildren(main, host);
 
+  const line = el("button", "week-line");
+  const lineText = document.createTextNode("");
+  line.append(lineText, el("span", null, "›"));
+  line.onclick = () => openWeek(todayIso());
+  const weekButton = el("button", "btn small ghost", "Неделя ›");
+  weekButton.onclick = () => openWeek(todayIso());
+  ctx.setBar({ right: [weekButton] });
+
+  const weekNode = el("div");
   const nav = el("div", "diary-nav");
   const prev = el("button", "btn small ghost", "‹");
   const title = el("h2", "diary-title");
@@ -113,60 +143,76 @@ export async function mountWeek(root, ctx) {
   const summary = el("section", "box");
   summary.append(el("h3", null, "Итоги недели"), el("div", "diary-list"));
   const summaryBody = summary.lastChild;
-  main.append(addEntryButton(ctx), nav, months, days, summary);
+  weekNode.append(nav, months, days, summary);
+  const weekScreen = { node: weekNode, reload: loadWeek };
 
   prev.onclick = () => moveWeek(-7);
   next.onclick = () => moveWeek(7);
 
   // --- writes --------------------------------------------------------------------------------
 
-  // Queues one write and applies its answer; a failure reloads what is true.
+  // Queues one write and applies its answer; a failure reloads what is true, once every write is in.
   function write(send, apply) {
     pending += 1;
-    let failed = false;
     writes = writes
       .then(send)
       .then(apply)
       .catch((error) => {
-        failed = true;
+        missed = true;
         handleError(error);
       })
       .finally(() => {
         pending -= 1;
-        if (!failed) return;
-        loadWeek();
+        written += 1;
+        if (pending || !missed) return;
+        missed = false;
+        loadToday();
         for (const screen of state.screens) screen.reload?.();
       });
     return writes;
   }
 
-  // A Day as the server now has it: into the Week if it is on screen, and into an open editor of it.
-  function takeDay(day) {
-    if (state.week) {
-      const at = state.week.days.findIndex((d) => d.day === day.day);
-      if (at >= 0) {
-        state.week.days[at] = day;
-        resummarise();
-        keepWeek();
-        paintWeek();
-      }
-    }
-    for (const screen of state.screens) screen.takeDay?.(day);
+  // True for an answer that may predate a write: one is still out (everything is read again after it), or one
+  // landed since the read began at `mark` (then `again` asks anew).
+  function crossed(mark, again) {
+    if (pending) missed = true;
+    else if (mark !== written) again();
+    else return false;
+    return true;
   }
 
-  function resummarise() {
-    state.week.summary = state.week.days.flatMap((d) =>
-      d.entries.filter((e) => e.level !== "day").map((e) => ({ ...e, day: d.day })),
-    );
+  // The Weeks in memory, each once: the current one and the one on the Week screen.
+  const weeks = () => [...new Set([state.now, state.week])].filter(Boolean);
+  // Every Day editor alive: the root's and any open over the Week.
+  const editors = () => [rootEditor, ...state.screens].filter(Boolean);
+
+  // A Day as the server now has it: into the Weeks that hold it, and into every editor of it.
+  function takeDay(day) {
+    for (const entry of day.entries) if (levels.has(entry.id)) entry.level = levels.get(entry.id).level;
+    for (const week of weeks()) {
+      const at = week.days.findIndex((d) => d.day === day.day);
+      if (at < 0) continue;
+      week.days[at] = day;
+      resummarise(week);
+    }
+    keepWeek();
+    paintWeek();
+    paintLine();
+    for (const screen of editors()) screen.takeDay?.(day);
+  }
+
+  function resummarise(week) {
+    week.summary = week.days.flatMap((d) => d.entries.filter((e) => e.level !== "day").map((e) => ({ ...e, day: d.day })));
   }
 
   function setLevel(entryId, level) {
-    for (const d of state.week?.days ?? []) for (const e of d.entries) if (e.id === entryId) e.level = level;
-    if (state.week) {
-      resummarise();
-      keepWeek();
-      paintWeek();
+    for (const week of weeks()) {
+      for (const d of week.days) for (const e of d.entries) if (e.id === entryId) e.level = level;
+      resummarise(week);
     }
+    keepWeek();
+    paintWeek();
+    for (const screen of editors()) screen.setLevel?.(entryId, level);
   }
 
   // «+» / «−»: the Level changes on screen at once, then the server's answer settles it.
@@ -175,10 +221,21 @@ export async function mountWeek(root, ctx) {
     if (!level) return;
     haptic("select");
     setLevel(entry.id, level);
+    const shown = { level };
+    levels.set(entry.id, shown);
+    const settled = () => {
+      if (levels.get(entry.id) === shown) levels.delete(entry.id); // a later step on the same Entry keeps its own
+    };
     onDone?.({ ...entry, level });
     write(
-      () => api(`/diary/entries/${entry.id}/${by > 0 ? "raise" : "lower"}`, { method: "POST" }),
+      () =>
+        api(`/diary/entries/${entry.id}/${by > 0 ? "raise" : "lower"}`, { method: "POST" }).catch((error) => {
+          settled();
+          throw error;
+        }),
       (answer) => {
+        settled();
+        if (levels.has(entry.id)) return; // a later step on this Entry is still out: its answer settles it
         setLevel(answer.id, answer.level);
         onDone?.(answer);
       },
@@ -190,15 +247,77 @@ export async function mountWeek(root, ctx) {
       if (!top) return;
       state.top = top;
       keepSnapshot("diary-top", top);
-      for (const screen of state.screens) screen.paintTop?.();
+      for (const screen of editors()) screen.paintTop?.();
     });
+  }
+
+  // --- the root: today's Day editor and the week line -------------------------------------------
+
+  // A new editor when the Day turns; what was being typed moves over to it.
+  function mountRoot(iso) {
+    const typed = rootEditor?.text() ?? "";
+    const known = state.now?.days.find((d) => d.day === iso);
+    rootEditor = dayEditor(iso, known ? structuredClone(known) : { day: iso, mark: null, entries: [] }, false);
+    rootEditor.setText(typed);
+    state.rootDay = iso;
+    main.replaceChildren(rootEditor.node, line);
+  }
+
+  function paintLine() {
+    const n = state.now?.days.filter((d) => d.entries.length).length ?? 0;
+    line.hidden = !state.now;
+    lineText.data = n ? `Эта неделя: ${n} ${plural(n, "день", "дня", "дней")} с записями` : "Эта неделя: пока без записей";
+  }
+
+  function paintRoot() {
+    const day = state.now?.days.find((d) => d.day === state.rootDay);
+    if (day) rootEditor.takeDay(day);
+    paintLine();
+  }
+
+  function focusRoot() {
+    if (wantsFocus()) rootEditor?.focus();
+  }
+
+  // Reads the current Week and the top five in one round; the kept Week paints first.
+  async function loadToday() {
+    const mine = ++todayTicket;
+    const today = todayIso();
+    const start = mondayOf(today);
+    if (state.now?.start !== start) {
+      const kept = snapshot("diary-week");
+      state.now = kept?.start === start ? kept : null;
+    }
+    if (!rootEditor || state.rootDay !== today) mountRoot(today);
+    paintRoot();
+    const mark = written;
+    const fresh = Promise.all([
+      attempt(() => api("/diary/week?" + new URLSearchParams({ day: today, tz: TIMEZONE }))),
+      attempt(() => api("/diary/suggestions")),
+    ]).then(([week, top]) => {
+      if (top) {
+        state.top = top;
+        keepSnapshot("diary-top", top);
+        for (const screen of editors()) screen.paintTop?.();
+      }
+      if (!week || mine !== todayTicket || crossed(mark, loadToday)) return;
+      if (state.week?.start === week.start) state.week = week;
+      state.now = week;
+      keepWeek();
+      paintWeek();
+      paintRoot();
+    });
+    todayRead = fresh;
+    fresh.finally(() => {
+      if (todayRead === fresh) todayRead = null;
+    });
+    if (!state.now) await fresh;
   }
 
   // --- the Week ------------------------------------------------------------------------------
 
-
   function keepWeek() {
-    if (state.week && state.week.start === mondayOf(todayIso())) keepSnapshot("diary-week", state.week);
+    if (state.now?.start === mondayOf(todayIso())) keepSnapshot("diary-week", state.now);
   }
 
   function paintWeek() {
@@ -254,27 +373,34 @@ export async function mountWeek(root, ctx) {
     return card;
   }
 
-  // Reads the Week on screen and the top five in one round; the kept current Week paints first.
+  // Reads the Week on the Week screen; the current Week paints first from what the root already holds.
   async function loadWeek() {
     const mine = ++ticket;
     state.today = todayIso();
     const start = mondayOf(state.anchor);
-    if (state.week?.start !== start) {
-      const kept = snapshot("diary-week");
-      state.week = kept?.start === start ? kept : null;
-    }
+    if (state.week?.start !== start) state.week = state.now?.start === start ? state.now : null;
     paintWeek();
-    const fresh = Promise.all([
-      attempt(() => api("/diary/week?" + new URLSearchParams({ day: state.anchor, tz: TIMEZONE }))),
-      attempt(() => api("/diary/suggestions")),
-    ]).then(([week, top]) => {
-      if (top) {
-        state.top = top;
-        keepSnapshot("diary-top", top);
+    if (todayRead && start === mondayOf(state.today)) {
+      // today's editor is reading this very Week: its answer serves both
+      if (state.week) return;
+      await todayRead;
+      if (mine !== ticket) return;
+      if (state.now?.start === start) {
+        state.week = state.now;
+        paintWeek();
+        return;
       }
-      if (!week || mine !== ticket || pending) return;
+    }
+    const mark = written;
+    const asked = "/diary/week?" + new URLSearchParams({ day: state.anchor, tz: TIMEZONE });
+    const fresh = attempt(() => api(asked)).then((week) => {
+      if (!week || mine !== ticket || crossed(mark, loadWeek)) return;
       state.week = week;
-      keepWeek();
+      if (week.start === mondayOf(todayIso())) {
+        state.now = week;
+        keepWeek();
+        paintRoot();
+      }
       paintWeek();
     });
     if (!state.week) await fresh;
@@ -285,11 +411,12 @@ export async function mountWeek(root, ctx) {
     loadWeek();
   }
 
-  // --- screens over the Week: the Day editor, the Month, the Year ---------------------------
+  // --- nested screens: the Week, a Day editor, the Month, the Year ---------------------------
 
   function push(screen) {
     (state.screens.at(-1)?.node ?? main).hidden = true;
     state.screens.push(screen);
+    screen.node.hidden = false; // the Week's node is used again after a screen over it was dropped
     host.append(screen.node);
     host.hidden = false;
     setBack(pop);
@@ -308,7 +435,8 @@ export async function mountWeek(root, ctx) {
       host.hidden = true;
       main.hidden = false;
       setBack(null);
-      loadWeek(); // a Month or Year screen may have moved Entries of this Week
+      loadToday(); // the screens above may have changed today's Entries
+      focusRoot();
     }
     window.scrollTo(0, 0);
   }
@@ -320,6 +448,14 @@ export async function mountWeek(root, ctx) {
     setBack(null);
   }
 
+  // «Неделя ›», the week line, a Day on the Dashboard: that Day's Week, straight over the root.
+  function openWeek(day) {
+    closeAll();
+    state.anchor = day;
+    push(weekScreen);
+    loadWeek();
+  }
+
   function openDay(iso) {
     const known = state.week?.days.find((d) => d.day === iso);
     push(dayEditor(iso, known ? structuredClone(known) : { day: iso, mark: null, entries: [] }, !known));
@@ -327,11 +463,14 @@ export async function mountWeek(root, ctx) {
 
   function dayEditor(iso, initial, unknown) {
     let day = initial;
+    let local = []; // changes shown and not yet answered: each stays over any Day that lands before its own answer
     const node = el("div", "detail diary-editor");
     const head = el("h2", null, longDay(iso));
     const markRow = el("div", "mark-row");
     const markButtons = MARKS.map((mark) => {
       const button = el("button", "mark-btn", MARK_EMOJI[mark]);
+      button.setAttribute("aria-label", MARK_NAMES[mark]);
+      button.title = MARK_NAMES[mark];
       button.onclick = () => setMark(day.mark === mark ? null : mark);
       markRow.append(button);
       return button;
@@ -399,17 +538,18 @@ export async function mountWeek(root, ctx) {
       );
     }
 
+    // «+» raises the Entry into the Week's Summary; a raised one shows its Level instead. Deleting is inside «✏️».
     function entryRow(entry) {
       const row = el("div", "entry-row" + (entry.id < 0 ? " pending" : ""));
       const text = el("span", "entry-text", entry.text);
+      const raise = el("button", "step", "+");
+      raise.setAttribute("aria-label", "В итоги недели");
+      raise.onclick = () => step({ ...entry, day: iso }, 1);
       const edit = el("button", "step", "✏️");
       edit.setAttribute("aria-label", "Изменить");
       edit.onclick = () => row.replaceWith(editRow(entry));
-      const remove = el("button", "step", "🗑");
-      remove.setAttribute("aria-label", "Удалить");
-      remove.onclick = () => removeEntry(entry);
-      row.append(text, ...levelTag(entry.level), edit, remove);
-      if (entry.id < 0) edit.disabled = remove.disabled = true;
+      row.append(text, ...(entry.level === "day" ? [raise] : levelTag(entry.level)), edit);
+      if (entry.id < 0) raise.disabled = edit.disabled = true;
       return row;
     }
 
@@ -421,6 +561,7 @@ export async function mountWeek(root, ctx) {
       save.type = "submit";
       const cancel = el("button", "btn small ghost", "✕");
       cancel.type = "button";
+      cancel.setAttribute("aria-label", "Отмена");
       cancel.onclick = () => {
         resetSlot(list);
         paint();
@@ -429,20 +570,45 @@ export async function mountWeek(root, ctx) {
         event.preventDefault();
         const text = field.value.trim();
         if (!text) return toast("Пустая запись");
-        day.entries = day.entries.map((e) => (e.id === entry.id ? { ...e, text } : e));
         resetSlot(list);
-        paint();
-        write(
+        change(
+          (d) => ({ ...d, entries: d.entries.map((e) => (e.id === entry.id ? { ...e, text } : e)) }),
           () => api(`/diary/entries/${entry.id}`, { method: "PATCH", body: { text } }),
-          (answer) => {
-            takeDay(answer);
-            refreshTop();
-          },
+          refreshTop,
         );
       };
-      row.append(field, save, cancel);
+      const remove = el("button", "btn small danger", "🗑");
+      remove.type = "button";
+      remove.setAttribute("aria-label", "Удалить");
+      remove.onclick = () => {
+        resetSlot(list);
+        removeEntry(entry);
+      };
+      row.append(field, save, cancel, remove);
       setTimeout(() => field.focus(), 0);
       return row;
+    }
+
+    // One change to the Day: `op` (Day -> Day) shows at once, the request follows, and its answer is the Day.
+    function change(op, send, then) {
+      const drop = () => {
+        local = local.filter((o) => o !== op);
+      };
+      local.push(op);
+      day = op(day);
+      paint();
+      write(
+        () =>
+          send().catch((error) => {
+            drop();
+            throw error;
+          }),
+        (answer) => {
+          drop();
+          takeDay(answer);
+          then?.();
+        },
+      );
     }
 
     let temp = 0;
@@ -453,34 +619,34 @@ export async function mountWeek(root, ctx) {
       paintCounter();
       paintSuggest();
       haptic("select");
-      day.entries = [...day.entries, { id: --temp, text, level: "day" }];
-      paint();
-      write(
+      const entry = { id: --temp, text, level: "day" };
+      change(
+        (d) => ({ ...d, entries: [...d.entries, entry] }),
         () => api("/diary/entries", { method: "POST", body: { day: iso, text } }),
-        (answer) => {
-          takeDay(answer);
-          refreshTop();
-        },
+        refreshTop,
       );
     }
 
     function removeEntry(entry) {
-      day.entries = day.entries.filter((e) => e.id !== entry.id);
-      paint();
-      write(() => api(`/diary/entries/${entry.id}`, { method: "DELETE" }), takeDay);
+      change(
+        (d) => ({ ...d, entries: d.entries.filter((e) => e.id !== entry.id) }),
+        () => api(`/diary/entries/${entry.id}`, { method: "DELETE" }),
+      );
     }
 
     function setMark(mark) {
       haptic("select");
-      day = { ...day, mark };
-      paint();
-      write(() => api("/diary/marks", { method: "PUT", body: { day: iso, mark } }), takeDay);
+      change(
+        (d) => ({ ...d, mark }),
+        () => api("/diary/marks", { method: "PUT", body: { day: iso, mark } }),
+      );
     }
 
     async function reload() {
+      const mark = written;
       const week = await attempt(() => api("/diary/week?" + new URLSearchParams({ day: iso })));
       const fresh = week?.days.find((d) => d.day === iso);
-      if (fresh && !pending) screen.takeDay(fresh);
+      if (fresh && !crossed(mark, reload)) screen.takeDay(fresh);
     }
 
     const screen = {
@@ -488,10 +654,22 @@ export async function mountWeek(root, ctx) {
       reload,
       takeDay(answer) {
         if (answer.day !== iso) return;
-        day = answer;
+        // the Week keeps its own copy: an Entry not yet saved shows only here
+        day = local.reduce((d, op) => op(d), structuredClone(answer));
+        paint();
+      },
+      setLevel(entryId, level) {
+        day.entries = day.entries.map((e) => (e.id === entryId ? { ...e, level } : e));
         paint();
       },
       paintTop: () => input.value.trim() || paintSuggest(),
+      focus: () => input.focus(),
+      text: () => input.value,
+      setText(value) {
+        input.value = value;
+        paintCounter();
+        paintSuggest();
+      },
     };
     paint();
     paintCounter();
@@ -506,8 +684,10 @@ export async function mountWeek(root, ctx) {
     const node = el("div", "diary-period");
     const nav = el("div", "diary-nav");
     const back = el("button", "btn small ghost", "‹");
+    back.setAttribute("aria-label", "Назад");
     const head = el("h2", "diary-title");
     const fwd = el("button", "btn small ghost", "›");
+    fwd.setAttribute("aria-label", "Вперёд");
     nav.append(back, head, fwd);
     const up = el("button", "chip filter");
     const ownBox = el("section", "box");
@@ -552,8 +732,9 @@ export async function mountWeek(root, ctx) {
 
     async function reload() {
       const asked = ++mine;
+      const mark = written;
       const fresh = await attempt(() => api(spec.path(period)));
-      if (!fresh || asked !== mine || pending) return;
+      if (!fresh || asked !== mine || crossed(mark, reload)) return;
       data = fresh;
       paint();
     }
@@ -580,29 +761,37 @@ export async function mountWeek(root, ctx) {
   // --- the view ------------------------------------------------------------------------------
 
   async function show(arg = {}) {
+    const mine = ++shows;
     state.after = null;
-    const wanted = arg.edit ?? arg.day;
-    if (wanted) {
+    if (arg.day) {
+      // a Day on the Dashboard: its Week, both read before the pane is swapped in
       closeAll();
-      state.anchor = wanted;
-    } else if (!state.screens.length && !state.week) {
-      state.anchor = todayIso();
+      state.anchor = arg.day;
+      await Promise.all([loadToday(), loadWeek()]);
+      if (mine !== shows) return;
+      state.after = () => push(weekScreen); // the back button belongs to the pane on screen: it waits for shown()
+    } else {
+      await loadToday();
     }
-    await loadWeek();
-    if (arg.edit) state.after = () => openDay(arg.edit);
   }
 
   function shown() {
     const after = state.after;
     state.after = null;
-    after?.();
+    if (after) after();
+    else if (!state.screens.length) focusRoot();
   }
 
-  // Back in the app after a while: the Day may have turned, and the current Week with it.
+  // Back in the app after a while: the Day may have turned, and the editor and the current Week with it.
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState !== "visible" || !ctx.isCurrent() || state.screens.length) return;
-    if (mondayOf(state.anchor) === mondayOf(state.today)) state.anchor = todayIso();
-    loadWeek();
+    if (document.visibilityState !== "visible" || !ctx.isCurrent()) return;
+    const top = state.screens.at(-1);
+    if (!top) {
+      loadToday();
+    } else if (top === weekScreen) {
+      if (mondayOf(state.anchor) === mondayOf(state.today)) state.anchor = todayIso();
+      loadWeek();
+    }
   });
 
   return { show, shown, hide: closeAll };

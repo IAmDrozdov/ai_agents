@@ -55,8 +55,14 @@ product vocabulary.
 - **Smoke runner** — `interfaces/smoke`, the terminal adapter over the same contract
   and the workflow smoke surface (ADR-001; the other checks are in `docs/verifying.md`).
 - **Mini App** — the admin's Telegram Mini App (`telegram_bot/miniapp`, ADR-016): a static shell
-  plus a JSON API over notes and usage, opened from the 📒 menu button. Every API call carries
+  plus a JSON API over notes, the diary and usage, opened from the 📒 menu button. Every API call carries
   Telegram-signed **initData**, and only `ADMIN_TELEGRAM_ID` passes.
+- **Place** — one of the Mini App's two top-level destinations, chosen in its place menu: notes
+  («Заметки») or the diary («Дневник») (ADR-021). «Расходы» is reached from the same menu but is a nested
+  screen, not a Place. Avoid: tab, app (for the slot in the UI), section (a Section is a notes term).
+- **Mode** — which of a Place's two faces is showing: the working one («записи»: Items in notes, today's
+  Day in the diary) or its Dashboard («дашборд»). Remembered per Place. Not the notes "edit mode", which
+  reorders Sections. Avoid: view, toggle, tab.
 - **Backup** — one day's off-droplet copy of everything the bot keeps: both databases, the bytes
   of every notes File and Voice, and a manifest. Say Backup, not dump, snapshot or export.
 - **Settings vs Config** — `shared.config.Settings` is env/secrets; `<Name>Config`

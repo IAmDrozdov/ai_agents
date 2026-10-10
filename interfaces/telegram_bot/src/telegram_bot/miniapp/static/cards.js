@@ -1,6 +1,6 @@
-// Item cards and the small formatters the cards and the item view share.
+// Item rows and the small formatters the rows and the item view share.
 
-import { api, apiImageUrl, attempt, el, openUrl, parseTs } from "./core.js";
+import { apiImageUrl, el, openUrl, parseTs } from "./core.js";
 
 export const OTHER = "other";
 export const OVERDUE = "__overdue"; // the slug of the «Просрочено» row, which is not a Section
@@ -39,12 +39,6 @@ export function toLocalInput(when) {
 
 export const sectionLabel = (section) => `${section.emoji} ${section.name}`.trim();
 
-function sectionChip(section) {
-  const chip = el("span", "chip", sectionLabel(section));
-  chip.style.setProperty("--chip", section.color);
-  return chip;
-}
-
 export function externalLink(item, title) {
   const link = el("a", "title", title);
   link.href = item.url;
@@ -62,15 +56,64 @@ export function enrichmentBadge(item) {
   return el("div", "badge err", "⚠️ не разобрано" + why);
 }
 
-// opts: open(item), changed(item) for an item the card re-enriched, under (slug whose chip is left out),
-// markDone (Search shows both Statuses).
-export function card(item, opts) {
-  const node = el("article", "card clickable");
-  node.onclick = () => opts.open(item);
+const TITLE_CHARS = 120; // a row's title has no line clamp (the text flows round «⋮»), so a long one is cut
+const FALLBACK_CHARS = 81; // a URL, a file name or a note's whole text standing in for a title
+
+const clip = (text, n) => (text.length > n ? text.slice(0, n).trimEnd() + "…" : text);
+
+// A row's second line: where the Item came from, then the bot's gist; a text note shows the Owner's own words.
+function subOf(item, title) {
+  const lead = [
+    originOf(item),
+    item.kind === "file" && item.file_name && item.file_name !== title && "📎 " + item.file_name,
+    item.kind === "voice" && "🎤 " + fmtDuration(item.duration_s),
+  ];
+  const own = item.kind === "note" && item.text !== title && item.text;
+  const body = own || item.gist;
+  return [lead.filter(Boolean).join(" · "), body !== title && body].filter(Boolean).join(" — ");
+}
+
+// What the toast says after «Разобрать заново»: the Classifier files an Item again only from Other alone (ADR-0010).
+export function reenrichToast(item) {
+  const slugs = item.sections.map((section) => section.slug);
+  const refiles = !slugs.length || (slugs.length === 1 && slugs[0] === OTHER);
+  return refiles ? "Поставил в очередь" : "Поставил в очередь. Секции оставлю как есть";
+}
+
+// A part of a swipe panel: an icon over a word.
+function panelPart(tag, icon, label, cls) {
+  const node = el(tag, cls);
+  node.append(el("span", null, icon), label);
+  return node;
+}
+
+function panelButton(act, icon, label, cls) {
+  const button = panelPart("button", icon, label, cls);
+  button.dataset.act = act;
+  return button;
+}
+
+// One Item in a list: `.row-wrap[data-id]` holding the two swipe panels and the row. rowactions.js gives it its
+// taps, menu and swipes. opts.markDone: the list shows both Statuses (Search), so a done Item says so.
+export function row(item, opts = {}) {
+  const wrap = el("div", "row-wrap");
+  wrap.dataset.id = String(item.id);
+  const left = el("div", "acts acts-l");
+  left.append(panelPart("div", "⏰", "Напомнить")); // a label: letting the row go over it opens the Due
+  const right = el("div", "acts acts-r");
+  const todo = item.status === "todo";
+  right.append(panelButton("more", "⋯", "Ещё", "gray"), panelButton("done", todo ? "✓" : "↩", todo ? "Готово" : "Вернуть", "ok"));
+
+  const node = el("article", "row");
+  const more = el("button", "more", "⋮");
+  more.dataset.act = "more";
+  more.setAttribute("aria-label", "Действия");
+  node.append(more);
   if (item.thumb) {
     // the etag in the URL lets the webview keep the picture across launches (notes ADR-0012)
     const img = el("img", "thumb");
     img.alt = "";
+    img.draggable = false;
     node.append(img);
     apiImageUrl(`/notes/items/${item.id}/thumb?v=${item.thumb}`).then((url) => {
       if (url) img.src = url;
@@ -78,38 +121,29 @@ export function card(item, opts) {
     });
   }
 
-  const body = el("div", "card-body");
-  const title = itemTitle(item);
-  if (item.kind === "link" && isHttp(item.url)) body.append(externalLink(item, title));
-  else body.append(el("div", "title", title));
-  const origin = originOf(item);
-  if (origin) body.append(el("div", "origin", origin));
-  if (item.kind === "file" && item.file_name) body.append(el("div", "origin", "📎 " + item.file_name));
-  if (item.kind === "voice") body.append(el("div", "origin", "🎤 " + fmtDuration(item.duration_s)));
-  if (item.gist) body.append(el("div", "gist", item.gist));
-  if (item.kind !== "note" && item.text) body.append(el("div", "annotation", "✍️ " + item.text));
+  const full = itemTitle(item);
+  const title = clip(full, item.title ? TITLE_CHARS : FALLBACK_CHARS);
+  if (item.kind === "link" && isHttp(item.url)) {
+    const link = externalLink(item, title);
+    link.draggable = false; // a mouse swipe that starts on the title must not drag the link away
+    node.append(link);
+  } else {
+    node.append(el("div", "title", title));
+  }
+  const sub = subOf(item, full);
+  if (sub) node.append(el("div", "sub", sub));
 
   const meta = el("div", "meta");
-  if (opts.markDone && item.status === "done") meta.append(el("span", "badge ok", "✓ готово"));
-  if (item.due_at) {
-    const late = item.overdue;
-    meta.append(el("span", late ? "badge late" : "badge due", `⏰ ${late ? "просрочено · " : ""}${fmtDue(item.due_at)}`));
-  }
-  for (const section of item.sections) if (section.slug !== opts.under) meta.append(sectionChip(section));
-  if (meta.childElementCount) body.append(meta);
+  const mark = (text, cls) => {
+    if (meta.childNodes.length) meta.append(" · ");
+    meta.append(el("span", cls, text));
+  };
+  if (opts.markDone && !todo) mark("✓ готово", "ok");
+  if (item.due_at) mark(`⏰ ${item.overdue ? "просрочено · " : ""}${fmtDue(item.due_at)}`, item.overdue ? "late" : null);
+  if (item.enrichment_status === "pending") mark("⏳ разбираю");
+  else if (item.enrichment_status === "failed") mark("⚠️ не разобрано", "late");
+  if (meta.childNodes.length) node.append(meta);
 
-  if (item.enrichment_status === "pending") {
-    body.append(enrichmentBadge(item));
-  } else if (item.enrichment_status === "failed") {
-    body.append(enrichmentBadge(item));
-    const retry = el("button", "btn small", "Разобрать заново");
-    retry.onclick = async (event) => {
-      event.stopPropagation();
-      const updated = await attempt(() => api(`/notes/items/${item.id}/reenrich`, { method: "POST" }));
-      if (updated) opts.changed(updated);
-    };
-    body.append(retry);
-  }
-  node.append(body);
-  return node;
+  wrap.append(left, right, node);
+  return wrap;
 }

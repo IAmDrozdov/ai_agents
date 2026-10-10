@@ -47,9 +47,11 @@ export function resetSlot(node) {
 
 export class AuthError extends Error {}
 
-// --- snapshots: the last answers, kept across launches so a view paints before the network answers (ADR-019) ---
+// --- what the phone keeps across launches: snapshots of the last answers, so a view paints before the network
+// answers (ADR-019), and the navigation memory (ADR-021) ---
 
 const SNAPSHOT_KEY = "snapshot_v1";
+const PREFS_KEY = "nav_v1";
 const SNAPSHOT_ENTRIES = 40;
 const SNAPSHOT_CHARS = 900_000; // DeviceStorage holds 5 MB per user
 const SNAPSHOT_READ_MS = 500;
@@ -61,30 +63,36 @@ let wiped = false; // a 401 or 403 cleared them: nothing writes them again durin
 // answer DeviceStorage with an error (Telegram Web: UNSUPPORTED), and then this launch uses localStorage.
 let deviceStorageFailed = false;
 const deviceStorage = () => (!deviceStorageFailed && atLeast("9.0") && tg.DeviceStorage) || null;
-const localKey = () => `${SNAPSHOT_KEY}_${tg.initDataUnsafe?.user?.id ?? "anon"}`;
+const localKey = (key) => `${key}_${tg.initDataUnsafe?.user?.id ?? "anon"}`;
 
-function readLocal() {
+function readLocal(key) {
   try {
-    return localStorage.getItem(localKey());
+    return localStorage.getItem(localKey(key));
   } catch {
     return null;
   }
 }
 
-function readSnapshots() {
+// `late(value)` takes a DeviceStorage answer that arrives after the wait is over.
+function readStored(key, late) {
   const store = deviceStorage();
-  if (!store) return Promise.resolve(readLocal());
+  if (!store) return Promise.resolve(readLocal(key));
   return new Promise((resolve) => {
+    let waiting = true;
     const fallBack = () => {
       deviceStorageFailed = true;
-      resolve(readLocal());
+      resolve(readLocal(key));
     };
-    const timer = setTimeout(() => resolve(null), SNAPSHOT_READ_MS); // slow, not broken: keep DeviceStorage
+    const timer = setTimeout(() => {
+      waiting = false;
+      resolve(null); // slow, not broken: keep DeviceStorage
+    }, SNAPSHOT_READ_MS);
     try {
-      store.getItem(SNAPSHOT_KEY, (error, value) => {
+      store.getItem(key, (error, value) => {
         clearTimeout(timer);
         if (error) fallBack();
-        else resolve(value);
+        else if (waiting) resolve(value);
+        else late?.(value);
       });
     } catch {
       clearTimeout(timer);
@@ -93,37 +101,66 @@ function readSnapshots() {
   });
 }
 
-function writeLocal(raw) {
+function writeLocal(key, raw) {
   try {
-    if (raw == null) localStorage.removeItem(localKey());
-    else localStorage.setItem(localKey(), raw);
+    if (raw == null) localStorage.removeItem(localKey(key));
+    else localStorage.setItem(localKey(key), raw);
   } catch {
-    // full or blocked storage: the app works without snapshots
+    // full or blocked storage: the app works without it
   }
 }
 
-function writeSnapshots(raw) {
+function writeStored(key, raw) {
   const store = deviceStorage();
   if (!store) {
-    writeLocal(raw);
+    writeLocal(key, raw);
     return;
   }
   const done = (error) => {
     if (!error) return;
     deviceStorageFailed = true;
-    writeLocal(raw);
+    writeLocal(key, raw);
   };
   try {
-    if (raw == null) store.removeItem(SNAPSHOT_KEY, done);
-    else store.setItem(SNAPSHOT_KEY, raw, done);
+    if (raw == null) store.removeItem(key, done);
+    else store.setItem(key, raw, done);
   } catch {
     done(true);
   }
 }
 
+// The navigation memory: { place, mode: { <place>: <mode> }, section, rail }. Whoever reads a field checks it.
+let keptPrefs = {}; // as the last launch left it
+let patchedPrefs = {}; // what this launch changed: it wins over a read that answers late
+
+function parsePrefs(raw) {
+  try {
+    const data = raw ? JSON.parse(raw) : null;
+    if (!data || typeof data !== "object" || Array.isArray(data)) return {};
+    return { ...data, mode: data.mode && typeof data.mode === "object" ? data.mode : {} };
+  } catch {
+    return {}; // a damaged memory is no memory
+  }
+}
+
+export const prefs = () => ({ ...keptPrefs, ...patchedPrefs, mode: { ...keptPrefs.mode, ...patchedPrefs.mode } });
+
+// Merges `patch` into the memory and writes it at once; `mode` is merged per Place.
+export function savePrefs({ mode, ...rest }) {
+  if (wiped) return;
+  Object.assign(patchedPrefs, rest);
+  if (mode) patchedPrefs.mode = { ...patchedPrefs.mode, ...mode };
+  writeStored(PREFS_KEY, JSON.stringify(prefs()));
+}
+
 // Reads what the last launch kept; never throws and never waits longer than SNAPSHOT_READ_MS.
-export async function loadSnapshots() {
-  const raw = await readSnapshots();
+export async function loadStored() {
+  const lateNav = (value) => {
+    keptPrefs = parsePrefs(value);
+    if (Object.keys(patchedPrefs).length) writeStored(PREFS_KEY, JSON.stringify(prefs()));
+  };
+  const [raw, nav] = await Promise.all([readStored(SNAPSHOT_KEY), readStored(PREFS_KEY, lateNav)]);
+  keptPrefs = parsePrefs(nav);
   try {
     const parsed = raw ? JSON.parse(raw) : null;
     if (parsed?.v === 1 && Array.isArray(parsed.entries)) {
@@ -149,16 +186,20 @@ export function keepSnapshot(key, data) {
       entries = entries.slice(1);
       raw = JSON.stringify({ v: 1, entries });
     }
-    writeSnapshots(raw);
+    writeStored(SNAPSHOT_KEY, raw);
   }, 300);
 }
 
-function forgetSnapshots() {
+function forgetStored() {
   wiped = true;
   snapshots.clear();
+  keptPrefs = {};
+  patchedPrefs = {};
   clearTimeout(persistTimer);
-  writeSnapshots(null);
-  writeLocal(null); // a launch that fell back may have left a copy here too
+  for (const key of [SNAPSHOT_KEY, PREFS_KEY]) {
+    writeStored(key, null);
+    writeLocal(key, null); // a launch that fell back may have left a copy here too
+  }
 }
 
 // The pause before asking again about Items still being enriched: quick at first, then every 30 s,
@@ -180,7 +221,7 @@ export async function api(path, { method = "GET", body } = {}) {
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   if (response.status === 401 || response.status === 403) {
-    forgetSnapshots(); // nothing of the Owner's stays on a device that lost access
+    forgetStored(); // nothing of the Owner's stays on a device that lost access
     throw new AuthError(response.status === 401 ? "expired" : "forbidden");
   }
   if (!response.ok) {
@@ -196,7 +237,7 @@ export async function api(path, { method = "GET", body } = {}) {
   return response.status === 204 ? null : response.json();
 }
 
-const images = new Map(); // path -> Promise of an object URL, shared by every card asking for it
+const images = new Map(); // path -> Promise of an object URL, shared by every row asking for it
 
 // An authed image as an object URL (an <img src> cannot carry the Authorization header); null if missing.
 export function apiImageUrl(path) {
@@ -211,12 +252,27 @@ export function apiImageUrl(path) {
 }
 
 let toastTimer = null;
-export function toast(text) {
+// With { action, label } the toast carries a button that runs `action` once, and stays 4 s instead of 2.6 s.
+export function toast(text, { action, label } = {}) {
   const box = document.getElementById("toast");
-  box.textContent = text;
+  const hide = () => {
+    clearTimeout(toastTimer);
+    box.classList.remove("show");
+    const button = box.querySelector("button");
+    if (button) button.onclick = null; // a faded toast must not act
+  };
+  hide();
+  box.replaceChildren(el("span", null, text));
+  if (action) {
+    const button = el("button", null, label);
+    button.onclick = () => {
+      hide();
+      action();
+    };
+    box.append(button);
+  }
   box.classList.add("show");
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => box.classList.remove("show"), 2600);
+  toastTimer = setTimeout(hide, action ? 4000 : 2600);
 }
 
 let halted = false;
@@ -225,7 +281,10 @@ export const isHalted = () => halted;
 // Replaces the whole app with a message; a view that finishes loading afterwards must not paint over it.
 export function showMessage(text) {
   halted = true;
-  document.getElementById("tabs").replaceChildren();
+  setBack(null);
+  hideMainButton();
+  document.getElementById("topbar").replaceChildren();
+  document.getElementById("menu").hidden = true;
   document.getElementById("view").replaceChildren(el("p", "message", text));
 }
 
@@ -274,8 +333,15 @@ export function prepareShell() {
 }
 
 let backHandler = null;
+// A screen with a way back is a nested one and has no title row (ADR-021). Telegram's back button returns from
+// it; a client without one (Bot API below 6.1) gets the shell's «← Назад».
 export function setBack(handler) {
-  if (!atLeast("6.1")) return;
+  const native = atLeast("6.1");
+  const button = document.getElementById("back");
+  document.getElementById("topbar").hidden = Boolean(handler) || halted;
+  button.hidden = native || !handler;
+  button.onclick = handler;
+  if (!native) return;
   if (backHandler) tg.BackButton.offClick(backHandler);
   backHandler = handler;
   if (handler) {
@@ -284,6 +350,26 @@ export function setBack(handler) {
   } else {
     tg.BackButton.hide();
   }
+}
+
+let mainHandler = null;
+// Telegram's main button under the page («✓ Готово» on the Item view): one text and one handler at a time.
+export function mainButton(text, handler) {
+  const button = tg?.MainButton;
+  if (!button) return;
+  if (mainHandler) button.offClick(mainHandler);
+  mainHandler = handler;
+  button.setText(text);
+  button.onClick(handler);
+  button.show();
+}
+
+export function hideMainButton() {
+  const button = tg?.MainButton;
+  if (!button) return;
+  if (mainHandler) button.offClick(mainHandler);
+  mainHandler = null;
+  button.hide();
 }
 
 export function confirmAction(message) {

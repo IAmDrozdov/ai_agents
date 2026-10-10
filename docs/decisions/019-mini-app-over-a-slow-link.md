@@ -1,6 +1,6 @@
 # ADR-019: The Mini App is built for a slow link: few round trips, cached assets, a snapshot on the phone
 
-Status: Accepted (2026-10-07). Amends ADR-016 (decision 2: how the shell is served).
+Status: Accepted (2026-10-07). Amends ADR-016 (decision 2: how the shell is served). Amended by ADR-021 (the phone also keeps the navigation memory).
 
 ## Context
 

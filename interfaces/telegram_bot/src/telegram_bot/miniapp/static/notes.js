@@ -1,23 +1,30 @@
-// Заметки: every Section as an accordion with its own Status switch (ADR-0010), Search over all Items, and an edit
-// mode that reorders Sections by drag and drop. The state lives in memory for one launch.
+// Заметки: the Section rail and one Section's rows in one Status (ADR-021, notes ADR-0010), Search over all Items,
+// and an edit mode that reorders Sections by drag and drop. The Section picked and the rail are remembered across
+// launches (core.js prefs); everything else lives in memory for one launch.
 
 import {
   AuthError,
   api,
   attempt,
+  confirmAction,
   el,
   handleError,
   haptic,
   isHalted,
   keepSnapshot,
   pollDelay,
+  prefs,
   reconcile,
+  savePrefs,
   setText,
   snapshot,
+  tg,
   toast,
 } from "./core.js";
-import { OVERDUE, card, sectionLabel } from "./cards.js";
+import { OVERDUE, reenrichToast, row, sectionLabel } from "./cards.js";
 import { openDetail } from "./detail.js";
+import { openMenu } from "./nav.js";
+import { attachRowActions } from "./rowactions.js";
 import { openSectionForm } from "./sections.js";
 
 const PAGE = 30;
@@ -25,12 +32,8 @@ const MAX_CHUNK = 100; // the most items the server returns in one request
 const SEARCH_DELAY_MS = 300;
 const STALE_AFTER_MS = 350;
 const EDGE = 56; // a drag this close to the top or bottom of the screen scrolls the page
-const STATUSES = [
-  ["todo", "Сделать"],
-  ["done", "Готово"],
-];
 
-// The Lists this tab shows (CONTEXT: List), each with its request. A kept List's snapshot key (ADR-019) is the one
+// The Lists this mode shows (CONTEXT: List), each with its request. A kept List's snapshot key (ADR-019) is the one
 // earlier builds wrote, so the last launch's list still paints after a deploy; Search and a Recheck are never kept.
 const LISTS = {
   overdue: () => ({ key: "overdue", params: { overdue: "true" } }),
@@ -58,27 +61,32 @@ async function fetchItems(base, offset, want) {
   return { items, total: first.total };
 }
 
-// ctx.isCurrent() is false while another tab is shown. Returns { show(arg), shown(), hide() };
-// arg: { expand: slug } (a Dashboard Section bar) or { itemId } (the ✏️ Открыть button in the chat).
+// What stands for a Section on the rail and in the Section menu: its emoji, else the first two letters of its name.
+const markOf = (section) => section.emoji || Array.from(section.name.trim()).slice(0, 2).join("");
+
+// ctx.isCurrent() is false while another view shows; ctx.setBar() sets this view's part of the title row.
+// Returns { show(arg), shown(), hide() }; arg: { section: slug } (a Dashboard Section bar or «просрочено») or
+// { itemId } (the 📅 Перенести button in the chat).
 export async function mountNotes(root, ctx) {
   const state = {
     sections: snapshot("sections")?.sections ?? [], // in the Owner's order, each with todo_count and done_count
-    expanded: new Set(), // slugs
-    status: new Map(), // slug -> Status; a missing slug is on todo
+    section: prefs().section ?? null, // the slug picked last, or OVERDUE; selected() says which one shows
+    stay: false, // «Просрочено» was picked in this launch: it stays on screen even once nothing is Overdue
+    status: "todo", // one Status for the whole list; «Готово» is not remembered
+    rail: prefs().rail !== false,
     query: "", // the Search text the results belong to
     results: null, // { items, total } while searching
-    folded: new Set(), // slugs the Owner collapsed in the current results
+    searchOpen: false, // the Search field stands in for the title row
     editing: false,
     overlay: null, // the open item view or Section form
-    dirty: false, // something changed under the overlay: refresh once it closes
+    dirty: false, // something changed under the overlay or during a write: refresh once it is over
+    writes: 0, // Status changes not answered yet: a list read meanwhile would undo them on screen
     after: null, // what shown() does once the pane is on screen
   };
   const groups = new Map(); // slug -> group
-  // «Просрочено» is a group too, but not a Section: it lists every Overdue Item once, loaded even while collapsed
-  // so its count shows, and it is not on the Owner's list of Sections.
+  // «Просрочено» is a group too, but not a Section: it lists every Overdue Item once, loaded even while another
+  // Section shows so its count is known, and it is not on the Owner's list of Sections.
   const overdue = makeGroup({ slug: OVERDUE, name: "Просрочено", emoji: "⏰", color: "var(--danger)", todo_count: 0 });
-  overdue.node.classList.add("overdue");
-  overdue.switcher.hidden = true;
   groups.set(OVERDUE, overdue);
 
   const main = el("div");
@@ -86,63 +94,112 @@ export async function mountNotes(root, ctx) {
   overlay.hidden = true;
   root.replaceChildren(main, overlay);
 
-  const bar = el("div", "notes-bar");
-  const search = el("input", "input search");
+  // This view's part of the title row: «◧» and «🔍»; the Search field or «Секции · Готово» in place of the row.
+  const railToggle = el("button", "icon-btn", "◧");
+  railToggle.setAttribute("aria-label", "Полоса секций");
+  const searchButton = el("button", "icon-btn", "🔍");
+  searchButton.setAttribute("aria-label", "Поиск");
+  const search = el("input", "input");
   Object.assign(search, { type: "search", placeholder: "Поиск", maxLength: 200, autocomplete: "off" });
   search.enterKeyHint = "search";
-  const editButton = el("button", "btn small ghost edit-toggle");
-  bar.append(search, editButton);
+  const cancelSearch = el("button", "btn small ghost", "Отмена");
+  const editDone = el("button", "btn small ghost", "Готово");
+  const editRight = el("div", "right");
+  editRight.append(editDone);
+  const editBar = [el("h1", null, "Секции"), editRight];
+
+  const rail = el("nav", "rail");
+  const railButtons = new Map(); // slug -> button
+  const railOverdue = railButton("⏰", "Просрочено", () => pick(OVERDUE));
+  railOverdue.style.setProperty("--chip", "var(--danger)");
+  const railDone = railButton("✓", "Готово", toggleDone);
+  railDone.classList.add("done");
+  railDone.style.setProperty("--chip", "var(--good)");
+  const railEdit = railButton("✏️", "Правка секций", startEditing);
+  railEdit.classList.add("small");
+  const railSep = el("div", "rail-sep");
+
+  const secHead = makeHead("div"); // with the rail: a caption
+  const secButton = makeHead("button"); // without it: opens the list of Sections
+  secButton.node.onclick = openSectionMenu;
   const notice = el("p", "hint notice");
-  const accordion = el("div", "accordion");
+  const groupsBox = el("div", "groups");
   const empty = el("p", "empty");
   const retryButton = el("button", "btn wide ghost", "Повторить");
   retryButton.hidden = true;
   retryButton.onclick = () => refresh();
   const addButton = el("button", "btn wide ghost", "+ Новая секция");
-  main.append(bar, notice, accordion, empty, retryButton, addButton);
+  const listCol = el("div", "list-col");
+  listCol.append(secHead.node, secButton.node, notice, groupsBox, empty, retryButton, addButton);
+  const notes = el("div", "notes");
+  notes.append(rail, listCol);
+  main.append(notes);
 
-  const statusOf = (slug) => state.status.get(slug) || "todo";
+  const statusOf = (slug) => (slug === OVERDUE ? "todo" : state.status);
   const searching = () => state.results != null && !state.editing;
   const listOf = (g) => (g === overdue ? LISTS.overdue() : LISTS.inSection(g.slug, statusOf(g.slug)));
 
+  // The Section on screen: the one picked last while it is still there, else the first with something to do.
+  function selected() {
+    if (state.section === OVERDUE) {
+      if (state.stay || !overdue.loaded || overdue.section.todo_count > 0) return OVERDUE;
+    } else if (state.sections.some((section) => section.slug === state.section)) {
+      return state.section;
+    }
+    return (state.sections.find((section) => section.todo_count > 0) ?? state.sections[0])?.slug ?? null;
+  }
+
+  // The Items on screen: the results while searching, else the selected Section's.
+  const shownItems = () => (searching() ? state.results.items : (groups.get(selected())?.items ?? []));
+
+  function railButton(text, label, onclick) {
+    const button = el("button", null, text);
+    button.setAttribute("aria-label", label);
+    button.onclick = onclick;
+    return button;
+  }
+
+  // A Section's caption: its name, «· готово» on the done list, the number of Items.
+  function makeHead(tag) {
+    const node = el(tag, "sec-head");
+    const name = el("span", "name");
+    const st = el("span", "st", "· готово");
+    const n = el("span", "n");
+    node.append(name, st, n);
+    if (tag === "button") node.append(el("span", "caret"));
+    return { node, name, st, n };
+  }
+
   // --- groups --------------------------------------------------------------
 
+  // A Section's rows, plus its two other faces: the caption over its Search results and its row in edit mode.
   function makeGroup(section) {
     const g = { slug: section.slug, section, items: [], total: 0, loaded: false, loading: false, failed: false };
+    g.held = false; // `items` is this launch's list for the Status shown: the kept one is older
     g.ticket = 0;
-    g.cards = new Map(); // id -> { sig, node }
+    g.nodes = new Map(); // id -> { sig, node }
+    g.list = el("div", "rows");
+    g.note = el("p", "empty");
+    g.more = el("button", "btn wide ghost", "Ещё");
+    // After a failed first page "Повторить" starts over; after a failed later page it asks for that page again.
+    g.more.onclick = () => loadGroup(g, g.failed && !g.items.length);
+
+    g.found = el("section", "group");
+    g.foundHead = makeHead("div");
+    g.foundHead.st.hidden = true;
+    g.found.append(g.foundHead.node);
+
     g.node = el("section", "group");
     const head = el("div", "group-head");
     g.handle = el("span", "handle", "⋮⋮");
     g.handle.setAttribute("aria-label", "Перетащить");
-    g.toggle = el("button", "group-toggle");
-    g.caret = el("span", "caret");
     g.label = el("span", "group-name");
     g.count = el("span", "group-n");
-    g.toggle.append(g.caret, g.label, g.count);
     g.edit = el("button", "btn small ghost group-edit", "✏️");
     g.edit.setAttribute("aria-label", "Изменить секцию");
-    head.append(g.handle, g.toggle, g.edit);
-
-    g.switcher = el("div", "segmented");
-    g.segs = new Map();
-    for (const [value, label] of STATUSES) {
-      const button = el("button", "seg", label);
-      button.onclick = () => setStatus(g, value);
-      g.segs.set(value, button);
-      g.switcher.append(button);
-    }
-    g.list = el("div", "cards");
-    g.note = el("p", "empty");
-    g.more = el("button", "btn wide ghost", "Ещё");
-    g.body = el("div", "group-body");
-    g.body.append(g.switcher, g.list, g.more);
-    g.node.append(head, g.body);
-
-    g.toggle.onclick = () => toggleGroup(g);
+    head.append(g.handle, g.label, g.count, g.edit);
+    g.node.append(head);
     g.edit.onclick = () => openForm(g.section);
-    // After a failed first page "Повторить" starts over; after a failed later page it asks for that page again.
-    g.more.onclick = () => loadGroup(g, g.failed && !g.items.length);
     g.handle.onpointerdown = (event) => startDrag(g, event);
     g.handle.onpointermove = moveDrag;
     g.handle.onpointerup = () => endDrag(false);
@@ -150,13 +207,19 @@ export async function mountNotes(root, ctx) {
     return g;
   }
 
-  function cardFor(g, item, marked) {
+  function rowFor(g, item, marked) {
     const sig = JSON.stringify(item) + marked;
-    const hit = g.cards.get(item.id);
+    const hit = g.nodes.get(item.id);
     if (hit && hit.sig === sig) return hit.node;
-    const node = card(item, { open: openItem, changed: itemChanged, under: g.slug, markDone: marked });
-    g.cards.set(item.id, { sig, node });
+    const node = row(item, { markDone: marked });
+    g.nodes.set(item.id, { sig, node });
     return node;
+  }
+
+  function fillList(g, items, marked) {
+    const live = new Set(items.map((item) => item.id));
+    for (const id of g.nodes.keys()) if (!live.has(id)) g.nodes.delete(id);
+    reconcile(g.list, items.map((item) => rowFor(g, item, marked))); // prettier-ignore
   }
 
   function groupNote(g) {
@@ -165,38 +228,31 @@ export async function mountNotes(root, ctx) {
     return "Тут пусто.";
   }
 
-  function renderGroup(g, found) {
-    const status = statusOf(g.slug);
-    const inSearch = found != null;
-    const open = !state.editing && (inSearch ? !state.folded.has(g.slug) : state.expanded.has(g.slug));
-    const n = inSearch ? found.length : g.section[status + "_count"] || 0;
-    g.node.style.setProperty("--chip", g.section.color);
-    g.node.classList.toggle("dim", n === 0);
-    g.node.classList.toggle("open", open);
-    setText(g.label, sectionLabel(g.section));
-    setText(g.count, String(n));
-    setText(g.caret, open ? "▾" : "▸");
-    g.caret.hidden = state.editing;
-    g.handle.hidden = !state.editing;
-    g.edit.hidden = !state.editing;
-    g.toggle.disabled = state.editing;
-    g.body.hidden = !open;
-    if (!open) return;
-
-    g.switcher.hidden = inSearch || g === overdue;
-    for (const [value, button] of g.segs) button.classList.toggle("on", value === status);
-    const items = inSearch ? found : g.items;
-    const live = new Set(items.map((item) => item.id));
-    for (const id of g.cards.keys()) if (!live.has(id)) g.cards.delete(id);
-    let nodes = items.map((item) => cardFor(g, item, inSearch));
-    if (!nodes.length) {
-      setText(g.note, groupNote(g));
-      nodes = [g.note];
-    }
-    reconcile(g.list, nodes);
-    g.more.hidden = inSearch || !g.loaded || (!g.failed && g.items.length >= g.total);
+  // The selected Section: its rows or a line saying why there are none, then «Ещё».
+  function listNodes(g) {
+    fillList(g, g.items, false);
+    setText(g.note, groupNote(g));
     g.more.disabled = g.loading;
     setText(g.more, g.failed ? "Повторить" : "Ещё");
+    const nodes = [g.items.length ? g.list : g.note];
+    if (g.loaded && (g.failed || g.items.length < g.total)) nodes.push(g.more);
+    return nodes;
+  }
+
+  function foundNode(g, items) {
+    setText(g.foundHead.name, sectionLabel(g.section));
+    setText(g.foundHead.n, String(items.length));
+    fillList(g, items, true);
+    if (g.list.parentNode !== g.found) g.found.append(g.list);
+    return g.found;
+  }
+
+  function editNode(g) {
+    g.node.style.setProperty("--chip", g.section.color);
+    g.node.classList.toggle("dim", !g.section.todo_count);
+    setText(g.label, sectionLabel(g.section));
+    setText(g.count, String(g.section.todo_count || 0));
+    return g.node;
   }
 
   // Search results by Section: an Item filed under two Sections shows under both (ADR-0002).
@@ -211,13 +267,54 @@ export async function mountNotes(root, ctx) {
     return found;
   }
 
-  function render() {
-    const found = searching() ? resultsBySection() : null;
+  function paintHead({ node, name, st, n }, g) {
+    const status = statusOf(g.slug);
+    node.classList.toggle("overdue", g === overdue);
+    setText(name, sectionLabel(g.section));
+    st.hidden = status !== "done";
+    setText(n, String(g.section[status + "_count"] || 0));
+  }
+
+  function renderRail(slug) {
     const nodes = [];
-    if (!found && !state.editing) {
-      renderGroup(overdue, null);
-      if (overdue.section.todo_count > 0) nodes.push(overdue.node);
+    if (overdue.section.todo_count > 0 || slug === OVERDUE) nodes.push(railOverdue);
+    for (const section of state.sections) {
+      let button = railButtons.get(section.slug);
+      if (!button) {
+        button = railButton("", section.name, () => pick(section.slug));
+        railButtons.set(section.slug, button);
+      }
+      setText(button, markOf(section));
+      button.setAttribute("aria-label", section.name);
+      button.title = section.name;
+      button.style.setProperty("--chip", section.color);
+      button.classList.toggle("abbr", !section.emoji);
+      button.classList.toggle("on", section.slug === slug);
+      button.classList.toggle("dim", !section.todo_count);
+      nodes.push(button);
     }
+    for (const key of railButtons.keys()) if (!groups.has(key)) railButtons.delete(key);
+    railOverdue.classList.toggle("on", slug === OVERDUE);
+    railDone.classList.toggle("on", state.status === "done" && slug !== OVERDUE);
+    railDone.disabled = slug === OVERDUE;
+    reconcile(rail, [...nodes, railSep, railDone, railEdit]);
+  }
+
+  let barMode = null;
+  // The title row is set only when its kind changes: setting it again would take the focus out of the Search field.
+  function paintBar() {
+    const mode = state.editing ? "edit" : state.searchOpen ? "search" : "list";
+    if (mode === barMode) return;
+    barMode = mode;
+    if (mode === "edit") ctx.setBar({ replace: editBar });
+    else if (mode === "search") ctx.setBar({ replace: [search, cancelSearch] });
+    else ctx.setBar({ left: [railToggle], right: [searchButton] });
+  }
+
+  let rowActions = null;
+  let face = null; // which list is on screen: an open swipe panel does not outlive it
+
+  function render() {
     for (const section of state.sections) {
       let g = groups.get(section.slug);
       if (!g) {
@@ -225,24 +322,45 @@ export async function mountNotes(root, ctx) {
         groups.set(section.slug, g);
       }
       g.section = section;
-      if (found && !found.has(section.slug)) continue;
-      renderGroup(g, found?.get(section.slug));
-      nodes.push(g.node);
     }
     const slugs = new Set(state.sections.map((section) => section.slug));
     for (const slug of groups.keys()) if (slug !== OVERDUE && !slugs.has(slug)) groups.delete(slug);
-    if (!drag) reconcile(accordion, nodes);
 
-    search.hidden = state.editing;
-    setText(editButton, state.editing ? "Готово" : "Изменить");
+    const found = searching() ? resultsBySection() : null;
+    const plain = !found && !state.editing; // one Section's rows, under the rail or the Section menu
+    const slug = selected();
+    const next = state.editing ? "edit" : found ? "search" : `${slug}:${state.status}`;
+    if (next !== face) rowActions?.close();
+    face = next;
+    const current = plain ? (groups.get(slug) ?? null) : null;
+    let nodes = [];
+    if (state.editing) {
+      nodes = state.sections.map((section) => editNode(groups.get(section.slug)));
+    } else if (found) {
+      nodes = state.sections
+        .filter((section) => found.has(section.slug))
+        .map((section) => foundNode(groups.get(section.slug), found.get(section.slug)));
+    } else if (current) {
+      nodes = listNodes(current);
+    }
+    if (!drag) reconcile(groupsBox, nodes);
+    groupsBox.classList.toggle("editing", state.editing);
+
+    rail.hidden = !plain || !state.rail || !state.sections.length;
+    if (!rail.hidden) renderRail(slug);
+    railToggle.classList.toggle("on", state.rail);
+    railToggle.setAttribute("aria-pressed", String(state.rail));
+    secHead.node.hidden = !current || !state.rail;
+    secButton.node.hidden = !current || state.rail;
+    if (current) for (const head of [secHead, secButton]) paintHead(head, current);
     addButton.hidden = !state.editing;
-    accordion.classList.toggle("editing", state.editing);
     const capped = found && state.results.total > state.results.items.length;
     notice.hidden = !capped;
     if (capped) setText(notice, `Показаны первые ${state.results.items.length} из ${state.results.total}. Уточни запрос.`);
     empty.hidden = nodes.length > 0;
     setText(empty, found ? "Ничего не нашлось." : sectionsFailed ? "Не удалось загрузить секции." : "Загрузка…");
     retryButton.hidden = !(sectionsFailed && !nodes.length);
+    paintBar();
     schedulePoll();
   }
 
@@ -255,11 +373,12 @@ export async function mountNotes(root, ctx) {
     const ticket = ++g.ticket;
     const status = statusOf(g.slug);
     const { key, params } = listOf(g);
-    const kept = reset && !g.loaded ? snapshot(key) : null;
+    const kept = reset && !g.loaded && !g.held ? snapshot(key) : null;
     if (kept) {
       // the last launch's list shows at once; the fresh one replaces it below
       g.items = kept.items;
       g.total = kept.total;
+      g.held = true;
       g.loaded = true;
       g.section[status + "_count"] = kept.total;
     }
@@ -282,6 +401,7 @@ export async function mountNotes(root, ctx) {
       const fresh = data.items.filter((item) => !seen.has(item.id) && seen.add(item.id));
       g.items = reset ? fresh : g.items.concat(fresh);
       g.total = data.total;
+      g.held = true;
       g.loaded = true;
       g.section[status + "_count"] = data.total;
       if (reset) keepSnapshot(key, { items: g.items.slice(0, PAGE), total: g.total });
@@ -315,17 +435,21 @@ export async function mountNotes(root, ctx) {
     const ticket = ++searchTicket;
     const data = await attempt(() => api("/notes/items?" + new URLSearchParams(LISTS.search(query).params)));
     if (ticket !== searchTicket || !data || query !== search.value.trim()) return; // what is typed now wins
-    if (query !== state.query) state.folded = new Set();
     state.query = query;
     state.results = data;
     render();
   }
 
-  // Reloads what is on screen, all at once: the counts, the open Sections (as many items as they show) and the
-  // results. A collapsed Section reloads when it opens again. A call while one runs makes it go once more.
+  // Reloads what is on screen, all at once: the counts, the Section shown (as many items as it shows), «Просрочено»
+  // for its count, and the results. Another Section reloads when it is picked. A call while one runs makes it go
+  // once more.
   let refreshing = null;
   let refreshAgain = false;
   async function refresh() {
+    if (state.writes) {
+      state.dirty = true; // the answer of the change in flight starts this refresh itself
+      return undefined;
+    }
     if (refreshing) {
       refreshAgain = true;
       return refreshing;
@@ -347,53 +471,129 @@ export async function mountNotes(root, ctx) {
   }
 
   async function refreshOnce() {
-    render(); // a group for every Section known so far, so the open ones load alongside the counts
+    render(); // a group for every Section known so far, so the one shown loads alongside the counts
     const started = new Set();
     const jobs = [loadSections()];
+    const slug = selected();
     for (const g of groups.values()) {
-      if (state.expanded.has(g.slug) || g === overdue) {
+      if (g.slug === slug || g === overdue) {
         started.add(g);
         jobs.push(loadGroup(g, true, Math.max(PAGE, g.items.length), true));
       } else {
-        g.ticket += 1; // an expand load still in flight answers from before the change
+        g.ticket += 1; // a load still in flight answers from before the change
         g.loading = false;
         g.loaded = false;
       }
     }
     const query = search.value.trim();
-    if (query) jobs.push(runSearch(query));
+    if (query && state.searchOpen) jobs.push(runSearch(query));
     await Promise.all(jobs);
-    // An open Section the page only learnt of from the reply above (a first launch) loads now.
-    const late = [...groups.values()].filter(
-      (g) => state.expanded.has(g.slug) && !started.has(g) && !g.loaded && !g.loading,
-    );
-    await Promise.all(late.map((g) => loadGroup(g, true)));
+    // The Section to show may be known only from the replies above: a first launch, nothing Overdue any more.
+    pin();
+    const late = groups.get(selected());
+    if (late && !started.has(late) && !late.loaded && !late.loading) await loadGroup(late, true);
+  }
+
+  // The Section shown when none was picked stays the same from the first answer on: closing its last Item, or a
+  // new order of Sections, must not swap the list under the Owner. Memory only: a launch chooses again.
+  function pin() {
+    const slug = selected();
+    if (!slug) return;
+    state.section = slug;
+    if (slug === OVERDUE) state.stay = true;
   }
 
   // --- the Owner's taps ------------------------------------------------------
 
-  function toggleGroup(g) {
-    haptic("select");
-    if (searching()) {
-      if (!state.folded.delete(g.slug)) state.folded.add(g.slug);
-    } else if (!state.expanded.delete(g.slug)) {
-      state.expanded.add(g.slug);
-      if (!g.loaded) loadGroup(g, true);
+  function loadSelected() {
+    if (state.writes) return; // the answer of the change in flight starts a refresh, which reads this Section
+    const g = groups.get(selected());
+    if (g && !g.loaded && !g.loading) loadGroup(g, true);
+  }
+
+  // One Status for the whole list: what every Section holds belongs to the other one from here on.
+  function setStatus(value) {
+    if (state.status === value) return;
+    state.status = value;
+    for (const g of groups.values()) {
+      if (g === overdue) continue;
+      g.ticket += 1; // a load still in flight answers for the other Status
+      g.loading = false;
+      g.loaded = false;
+      g.held = false;
+      g.items = [];
+      g.total = 0;
+      g.list.classList.remove("stale");
     }
+  }
+
+  function pick(slug) {
+    haptic("select");
+    state.section = slug;
+    state.stay = slug === OVERDUE;
+    savePrefs({ section: slug });
+    if (slug === OVERDUE) setStatus("todo");
+    loadSelected();
+    window.scrollTo(0, 0);
     render();
   }
 
-  function setStatus(g, value) {
-    if (statusOf(g.slug) === value) return;
+  function toggleDone() {
+    if (selected() === OVERDUE) return;
     haptic("select");
-    state.status.set(g.slug, value);
-    g.loaded = false; // the other Status's kept list, if any, shows at once
-    loadGroup(g, true);
+    setStatus(state.status === "todo" ? "done" : "todo");
+    loadSelected();
     render();
+  }
+
+  railToggle.onclick = () => {
+    haptic("select");
+    state.rail = !state.rail;
+    savePrefs({ rail: state.rail });
+    render();
+  };
+
+  // Without the rail the Section's caption opens the same choice as a menu.
+  function openSectionMenu() {
+    const slug = selected();
+    const items = [];
+    if (overdue.section.todo_count > 0 || slug === OVERDUE) {
+      items.push({
+        icon: "⏰",
+        label: "Просрочено",
+        note: overdue.section.todo_count,
+        tone: "danger",
+        on: slug === OVERDUE,
+        color: "var(--danger)",
+        run: () => pick(OVERDUE),
+      });
+    }
+    for (const section of state.sections) {
+      items.push({
+        icon: markOf(section),
+        label: section.name,
+        note: section[state.status + "_count"],
+        on: section.slug === slug,
+        dim: !section.todo_count,
+        color: section.color,
+        run: () => pick(section.slug),
+      });
+    }
+    items.push({ sep: true });
+    if (slug !== OVERDUE) {
+      items.push(
+        state.status === "done"
+          ? { icon: "↩", label: "Показать «Сделать»", run: toggleDone }
+          : { icon: "✓", label: "Готово", tone: "good", run: toggleDone },
+      );
+    }
+    items.push({ icon: "✏️", label: "Правка секций", run: startEditing });
+    openMenu(secButton.node, items);
   }
 
   let searchTimer = 0;
   search.oninput = () => {
+    rowActions?.close();
     clearTimeout(searchTimer);
     const query = search.value.trim();
     if (!query) {
@@ -413,25 +613,84 @@ export async function mountNotes(root, ctx) {
     if (event.key === "Enter") search.blur(); // closes the keyboard; the results are already there
   };
 
-  editButton.onclick = () => {
+  function openSearch() {
+    if (state.searchOpen || state.editing) return;
     haptic("select");
-    state.editing = !state.editing;
+    state.searchOpen = true;
     render();
+    search.focus();
+  }
+
+  function closeSearch() {
+    clearTimeout(searchTimer);
+    searchTicket += 1; // drop any answer still on its way
+    search.value = "";
+    state.query = "";
+    state.results = null;
+    state.searchOpen = false;
+  }
+
+  searchButton.onclick = openSearch;
+  cancelSearch.onclick = () => {
+    closeSearch();
+    window.scrollTo(0, 0);
+    render();
+  };
+
+  function startEditing() {
+    if (state.editing) return;
+    haptic("select");
+    closeSearch();
+    state.editing = true;
+    window.scrollTo(0, 0);
+    render();
+  }
+
+  function stopEditing() {
+    endDrag(true);
+    state.editing = false;
+    loadSelected();
+    render();
+  }
+
+  editDone.onclick = () => {
+    haptic("select");
+    stopEditing();
   };
   addButton.onclick = () => openForm(null);
 
+  // Esc leaves Search or edit mode, «/» opens Search (the key next to the right Shift, whatever the layout).
+  document.addEventListener("keydown", (event) => {
+    if (!ctx.isCurrent() || state.overlay || isHalted()) return;
+    if (event.key === "Escape") {
+      if (!state.searchOpen && !state.editing) return;
+      event.preventDefault();
+      if (state.searchOpen) cancelSearch.onclick();
+      else stopEditing();
+      return;
+    }
+    if (event.metaKey || event.ctrlKey || event.altKey || /^(INPUT|TEXTAREA)$/.test(document.activeElement?.tagName)) return;
+    if (event.key === "/" || (event.code === "Slash" && !event.shiftKey)) {
+      event.preventDefault();
+      openSearch();
+    }
+  });
+
   // --- overlays: the item view and the Section form --------------------------
 
-  // `fresh`: the item was fetched just now, so the view need not ask for it again.
-  function openItem(item, fresh = false) {
+  // `fresh`: the item was fetched just now, so the view need not ask for it again. `focus`: "due" opens the
+  // reminder field, "sections" every Section's chip.
+  function openItem(item, { fresh = false, focus = null } = {}) {
     state.overlay = openDetail({
       list: main,
       host: overlay,
       item,
       fresh,
+      focus,
       sections: state.sections,
       changed: itemChanged,
       deleted: itemDeleted,
+      status: (shown, status, extra) => setItemStatus(shown, status, extra),
       closed: overlayClosed,
       visible: ctx.isCurrent,
     });
@@ -444,6 +703,7 @@ export async function mountNotes(root, ctx) {
       section,
       saved: () => {
         state.dirty = true;
+        settle(); // the answer may come after the form was closed
       },
       closed: overlayClosed,
     });
@@ -451,21 +711,43 @@ export async function mountNotes(root, ctx) {
 
   function overlayClosed() {
     state.overlay = null;
-    if (state.dirty) {
-      state.dirty = false;
-      refresh();
-    }
+    settle();
     schedulePoll();
+  }
+
+  // Brings the lists in line with the server once nothing is in the way: no overlay and no change still in flight.
+  function settle() {
+    if (!state.dirty || state.overlay || state.writes) return;
+    state.dirty = false;
+    refresh();
   }
 
   // The page's one copy of InSection and Overdue membership; the Overdue half is the server's verdict (item.overdue).
   const fits = (item, g) =>
     g === overdue ? item.overdue : item.status === statusOf(g.slug) && item.sections.some((s) => s.slug === g.slug);
 
+  // A kept List (ADR-019) would bring an Item back as it was before a change made here: it takes the new copy
+  // where the Item still belongs and loses it where it does not (`item` null: deleted). The next read of a List
+  // adds the Items that moved into it.
+  function rekeep(id, item) {
+    const lists = [[LISTS.overdue().key, Boolean(item?.overdue)]];
+    for (const { slug } of state.sections) {
+      const filed = Boolean(item?.sections.some((section) => section.slug === slug));
+      for (const status of ["todo", "done"]) lists.push([LISTS.inSection(slug, status).key, filed && item.status === status]);
+    }
+    for (const [key, stays] of lists) {
+      const kept = snapshot(key);
+      if (!kept?.items.some((other) => other.id === id)) continue;
+      if (stays) keepSnapshot(key, { ...kept, items: kept.items.map((other) => (other.id === id ? item : other)) });
+      else keepSnapshot(key, { items: kept.items.filter((other) => other.id !== id), total: Math.max(0, kept.total - 1) });
+    }
+  }
+
   // An item keeps its place while it still fits a Section's list and leaves it once not; the refresh that follows
   // brings it into the lists it moved to and corrects the counts.
-  function itemChanged(updated) {
+  function applyChange(updated) {
     localGen += 1;
+    rekeep(updated.id, updated);
     for (const g of groups.values()) {
       const at = g.items.findIndex((item) => item.id === updated.id);
       if (at < 0) continue;
@@ -479,15 +761,22 @@ export async function mountNotes(root, ctx) {
     if (state.results) {
       state.results.items = state.results.items.map((item) => (item.id === updated.id ? updated : item));
     }
+  }
+
+  function itemChanged(updated) {
+    applyChange(updated);
     changed();
   }
 
-  function itemDeleted(id) {
+  function dropItem(id) {
     localGen += 1;
+    rekeep(id, null);
+    let gone = state.results?.items.find((item) => item.id === id) ?? null;
     for (const g of groups.values()) {
-      const before = g.items.length;
-      g.items = g.items.filter((item) => item.id !== id);
-      g.total = Math.max(0, g.total - (before - g.items.length));
+      const at = g.items.findIndex((item) => item.id === id);
+      if (at < 0) continue;
+      [gone] = g.items.splice(at, 1);
+      g.total = Math.max(0, g.total - 1);
       if (g === overdue) g.section.todo_count = g.total;
     }
     if (state.results) {
@@ -495,14 +784,155 @@ export async function mountNotes(root, ctx) {
       state.results.items = state.results.items.filter((item) => item.id !== id);
       state.results.total -= before - state.results.items.length;
     }
+    if (gone) moveCounts(gone, gone.status, null);
+  }
+
+  function itemDeleted(id) {
+    dropItem(id);
     changed();
   }
 
   function changed() {
     render();
-    if (state.overlay) state.dirty = true;
-    else refresh();
+    state.dirty = true;
+    settle();
   }
+
+  // --- a row's actions ---------------------------------------------------------
+
+  // Where an Item sits in the loaded lists, so a change taken back puts it where it was.
+  const placesOf = (id) =>
+    [...groups.values()].map((g) => [g, g.items.findIndex((item) => item.id === id)]).filter(([, at]) => at >= 0);
+
+  function putBack(item, places) {
+    for (const [g, at] of places) {
+      if (groups.get(g.slug) !== g || !fits(item, g) || g.items.some((other) => other.id === item.id)) continue;
+      g.items.splice(Math.min(at, g.items.length), 0, item);
+      g.total += 1;
+      if (g === overdue) g.section.todo_count = g.total;
+    }
+  }
+
+  // The Section counts follow a change at once; `to` null: the Item is gone.
+  function moveCounts(item, from, to) {
+    for (const { slug } of item.sections) {
+      const section = state.sections.find((known) => known.slug === slug);
+      if (!section) continue;
+      section[from + "_count"] = Math.max(0, (section[from + "_count"] || 0) - 1);
+      if (to) section[to + "_count"] = (section[to + "_count"] || 0) + 1;
+    }
+  }
+
+  // A change is on its way to the server: a list read sent before it would bring the old state back, so every
+  // read in flight is dropped and none starts until the answer is in.
+  function beginWrite() {
+    state.writes += 1;
+    localGen += 1;
+    sectionsTicket += 1;
+    searchTicket += 1;
+    clearTimeout(pollTimer);
+    for (const g of groups.values()) {
+      g.ticket += 1;
+      g.loading = false;
+      g.list.classList.remove("stale");
+    }
+  }
+
+  function endWrite() {
+    state.writes -= 1;
+    state.dirty = true;
+    settle();
+  }
+
+  // One Status change: `next` shows at once (back at `places` if it returns to a list), the server's item replaces
+  // it, and a refusal brings `item` back. Resolves to the server's item, or null.
+  async function writeStatus(item, next, body, places) {
+    const was = placesOf(item.id);
+    applyChange(next);
+    putBack(next, places);
+    moveCounts(item, item.status, next.status);
+    render();
+    beginWrite();
+    const updated = await attempt(() => api(`/notes/items/${item.id}`, { method: "PATCH", body }));
+    if (updated) {
+      applyChange(updated);
+    } else {
+      applyChange(item);
+      putBack(item, was);
+      moveCounts(item, next.status, item.status);
+    }
+    render();
+    endWrite();
+    return updated ?? null;
+  }
+
+  // «Готово» and «Вернуть», wherever they are tapped: a real change at once (notes ADR-0010), and for 4 s a button
+  // that takes it back with a second one. `extra`: the item view's unsaved text, saved in the same request.
+  // Resolves to whether the server took it.
+  async function setItemStatus(item, status, extra = {}) {
+    if (item.status === status) return false;
+    haptic("select");
+    const places = placesOf(item.id);
+    const next = { ...item, ...extra, status, overdue: status === "todo" && item.overdue };
+    const write = writeStatus(item, next, { ...extra, status }, []);
+    const undo = async () => {
+      const updated = await write;
+      if (!updated) return;
+      const back = { ...updated, status: item.status, overdue: item.overdue };
+      writeStatus(updated, back, { status: item.status }, places);
+    };
+    if (status === "done") toast("Закрыто", { action: undo, label: "↩ Вернуть" });
+    else toast("Возвращено в «Сделать»", { action: undo, label: "Отменить" });
+    const taken = Boolean(await write);
+    if (taken) haptic("success");
+    return taken;
+  }
+
+  // The bot replies to the original message within a couple of seconds; the app gets out of the way.
+  async function showInChat(item) {
+    const shown = await attempt(() => api(`/notes/items/${item.id}/show`, { method: "POST" }));
+    if (!shown) return;
+    haptic("success");
+    tg.close();
+  }
+
+  async function reenrich(item) {
+    beginWrite();
+    const updated = await attempt(() => api(`/notes/items/${item.id}/reenrich`, { method: "POST" }));
+    if (updated) {
+      applyChange(updated);
+      render();
+      toast(reenrichToast(item));
+    }
+    endWrite();
+  }
+
+  async function remove(item) {
+    if (!(await confirmAction("Удалить эту заметку навсегда?"))) return;
+    beginWrite();
+    const gone = await attempt(async () => {
+      await api(`/notes/items/${item.id}`, { method: "DELETE" });
+      return true;
+    });
+    if (gone) {
+      dropItem(item.id);
+      render();
+      toast("Удалено");
+    }
+    endWrite();
+  }
+
+  rowActions = attachRowActions(listCol, {
+    itemOf: (id) => shownItems().find((item) => item.id === id) ?? null,
+    open: (item) => openItem(item),
+    done: (item) => setItemStatus(item, "done"),
+    undone: (item) => setItemStatus(item, "todo"),
+    remind: (item) => openItem(item, { focus: "due" }),
+    sections: (item) => openItem(item, { focus: "sections" }),
+    show: showInChat,
+    reenrich,
+    remove,
+  });
 
   // --- pending items and coming back to the app --------------------------------
 
@@ -514,12 +944,9 @@ export async function mountNotes(root, ctx) {
   let localGen = 0; // bumps on each change made here: a poll reply sent before one is stale
   function schedulePoll() {
     clearTimeout(pollTimer);
-    if (refreshing || state.overlay || drag || !ctx.isCurrent() || isHalted()) return;
+    if (refreshing || state.overlay || state.writes || drag || !ctx.isCurrent() || isHalted()) return;
     if (document.visibilityState !== "visible") return;
-    const shown = searching()
-      ? state.results.items
-      : [...groups.values()].filter((g) => state.expanded.has(g.slug)).flatMap((g) => g.items);
-    const pending = shown.filter((item) => item.enrichment_status === "pending");
+    const pending = shownItems().filter((item) => item.enrichment_status === "pending");
     if (!pending.length) {
       pollStep = 0;
       return;
@@ -549,7 +976,8 @@ export async function mountNotes(root, ctx) {
     const back = new Map(data.items.map((item) => [item.id, item]));
     if (ids.some((id) => back.get(id)?.enrichment_status !== "pending")) {
       pollStep = 0;
-      refresh();
+      state.dirty = true;
+      settle();
       return;
     }
     for (const g of groups.values()) g.items = g.items.map((item) => back.get(item.id) ?? item);
@@ -559,9 +987,10 @@ export async function mountNotes(root, ctx) {
 
   // Back in the app after sending something in the chat: show what arrived meanwhile.
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState !== "visible" || !ctx.isCurrent() || state.overlay || drag) return;
+    if (document.visibilityState !== "visible" || !ctx.isCurrent() || drag) return;
     pollStep = 0;
-    refresh();
+    state.dirty = true;
+    settle(); // waits for a nested screen to close
   });
 
   // --- drag and drop (edit mode) ---------------------------------------------
@@ -572,7 +1001,7 @@ export async function mountNotes(root, ctx) {
   function startDrag(g, event) {
     if (!state.editing || drag || orderSaving || state.sections.length < 2) return;
     event.preventDefault();
-    const nodes = [...accordion.children];
+    const nodes = [...groupsBox.children];
     const from = nodes.indexOf(g.node);
     const tops = nodes.map((node) => node.getBoundingClientRect().top);
     drag = {
@@ -588,7 +1017,7 @@ export async function mountNotes(root, ctx) {
       frame: 0,
     };
     g.handle.setPointerCapture(event.pointerId);
-    accordion.classList.add("sorting");
+    groupsBox.classList.add("sorting");
     g.node.classList.add("dragging");
     haptic("select");
     drag.frame = requestAnimationFrame(autoScroll);
@@ -637,7 +1066,7 @@ export async function mountNotes(root, ctx) {
     const { g, nodes, from, to, frame } = drag;
     cancelAnimationFrame(frame);
     drag = null;
-    accordion.classList.remove("sorting");
+    groupsBox.classList.remove("sorting");
     g.node.classList.remove("dragging");
     for (const node of nodes) node.style.transform = "";
     if (cancelled || to === from) {
@@ -673,31 +1102,28 @@ export async function mountNotes(root, ctx) {
     if (state.sections === before) loadSections(); // the server may know a list this page does not
   }
 
-  // --- the tab ---------------------------------------------------------------
+  // --- the view --------------------------------------------------------------
 
-  // Once the Sections are known (kept from the last launch), the tab shows at once and the refresh runs behind it.
+  // Once the Sections are known (kept from the last launch), the view shows at once and the refresh runs behind it.
   async function show(arg = {}) {
     state.after = null;
-    if (arg.expand) {
-      // a Section bar on the Dashboard: that Section open on «Сделать», nothing hiding it
+    if (arg.section) {
+      // a Section bar on the Dashboard, or «просрочено»: that Section on «Сделать», nothing hiding it
+      closeSearch();
       state.editing = false;
-      search.value = "";
-      state.query = "";
-      state.results = null;
-      searchTicket += 1;
-      state.expanded.add(arg.expand);
-      state.status.set(arg.expand, "todo");
+      state.section = arg.section;
+      state.stay = arg.section === OVERDUE;
+      savePrefs({ section: arg.section });
+      setStatus("todo");
     }
-    // the chat's ✏️ asks for one Item: it is fetched alongside the lists, never after them
+    // the chat's 📅 asks for one Item: it is fetched alongside the lists, never after them
     const wanted = arg.itemId ? attempt(() => api(`/notes/items/${arg.itemId}`)) : null;
     const loading = refresh();
-    const unknown = arg.expand && !state.sections.some((section) => section.slug === arg.expand);
-    if (!state.sections.length || unknown) await loading; // the Section to open must exist before the scroll
-    if (arg.expand) {
-      state.after = () => groups.get(arg.expand)?.node.scrollIntoView({ block: "start" });
-    } else if (wanted) {
+    const known = arg.section === OVERDUE || state.sections.some((section) => section.slug === arg.section);
+    if (!state.sections.length || (arg.section && !known)) await loading; // the Section to show must exist first
+    if (wanted) {
       const item = await wanted;
-      if (item) state.after = () => openItem(item, true);
+      if (item) state.after = () => openItem(item, { fresh: true });
     }
   }
 
@@ -710,8 +1136,10 @@ export async function mountNotes(root, ctx) {
 
   function hide() {
     clearTimeout(pollTimer);
+    rowActions.close();
     endDrag(true);
     state.overlay?.close();
+    state.editing = false; // the title row belongs to the next view: no way back to «Готово» from there
   }
 
   return { show, shown, hide };

@@ -25,8 +25,8 @@ function fitHeight(area) {
   window.scrollTo(0, y);
 }
 
-// Shows the form for `section` (null: a new one) in `host` instead of `list`. saved() runs when a change lands,
-// closed() when the form goes away. Returns { close }.
+// Shows the form for `section` (null: a new one) in `host` instead of `list`, as a nested screen (ADR-021): Telegram's
+// back button closes it. saved() runs when a change lands, closed() when the form goes away. Returns { close }.
 export function openSectionForm({ list, host, section, saved, closed }) {
   const listScroll = window.scrollY;
   let busy = false;
@@ -55,8 +55,6 @@ export function openSectionForm({ list, host, section, saved, closed }) {
     }
   }
 
-  const back = el("button", "btn small ghost", "← Назад");
-  back.onclick = close;
   const box = el("article", "detail");
   box.append(el("h2", "title", section ? "Изменить секцию" : "Новая секция"));
   const name = labelled(box, "Название", "text", section?.name ?? "", { name: "name", maxLength: 40 });
@@ -107,7 +105,7 @@ export function openSectionForm({ list, host, section, saved, closed }) {
   }
   box.append(actions);
 
-  host.replaceChildren(back, box);
+  host.replaceChildren(box);
   list.hidden = true;
   host.hidden = false;
   fitHeight(hint);

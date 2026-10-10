@@ -118,7 +118,7 @@ Details: `apps/notes/README.md`.
   transcribe or synthesize. No document text, transcript or audio is stored by the bot.
 - The bot's sqlite database keeps, indefinitely: Telegram ids, usernames, first names,
   filenames, per-job cost and error text, and your `/settings` choices. It's visible in
-  the Mini App's usage tab.
+  the Mini App's «Расходы» screen.
 - Notes (admin only) keeps every captured text and link, its fetched title, author,
   caption and thumbnail URL in `notes.sqlite3`, until you delete it in the Mini App.
 - `/revoke` deletes a user and their settings, but their past job rows (the list above)

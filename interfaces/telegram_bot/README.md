@@ -2,7 +2,7 @@
 
 Private Telegram bot exposing every workflow in `registry.py` (`doc_translator`,
 `pdf_tts`, `yt_dub`) through the job contract (ADR-005 thin adapter, ADR-012), plus the admin
-Mini App for notes and usage (`miniapp/`, ADR-016). Both use the bot's sqlite database
+Mini App for notes, the diary and usage (`miniapp/`, ADR-016, ADR-021). Both use the bot's sqlite database
 (`TELEGRAM_DB_PATH`); the Mini App also writes the notes database.
 
 Responsibilities:
@@ -20,7 +20,7 @@ Responsibilities:
 - access control: single admin (`ADMIN_TELEGRAM_ID`) mints one-time invite links
   (`/invite` → `t.me/<bot>?start=<token>`); redeemed users are whitelisted in sqlite
   until the admin runs `/revoke <id>`; private chats only
-- record every job (chars, cost USD + cost lines, facts, duration, status) for the Mini App's usage tab
+- record every job (chars, cost USD + cost lines, facts, duration, status) for the Mini App's «Расходы» screen
 
 Non-responsibilities: no prompt/template logic, no direct LLM SDK usage.
 
@@ -41,7 +41,7 @@ the message says the error was a passing blip and the job is worth retrying now.
 | `input` | 🟠 This document | 400/422, or a workflow-reported error |
 
 The usage log stores the scope too (`[provider] OpenAI server error: HTTP 500…`), so
-the usage tab can tell an outage apart from a real regression after the fact.
+the «Расходы» screen can tell an outage apart from a real regression after the fact.
 
 ## Audio delivery
 
@@ -116,9 +116,10 @@ Phone UI rules (found on an iPhone, 2026-09-29; the shell in `miniapp/static`):
 - Form controls are at least 16 px, and the viewport has `maximum-scale=1`. Below that iOS zooms
   the page on focus and never zooms back, so every screen is clipped at the right edge.
 - Nothing is `sticky` or `fixed` at the top: Telegram's native header covers the top edge of the
-  webview, so a sticky tab bar slid half under it. `disableVerticalSwipes` keeps a scroll at the
-  top from dragging the whole sheet.
+  webview, so a sticky row of tabs slid half under it (the title row that replaced it scrolls with the
+  page). Menus and the toast are popups over the page, not bars. `disableVerticalSwipes` keeps a scroll at
+  the top from dragging the whole sheet.
 - A tap rebuilds only what it changed. Controls are built once and only flip a class or text;
-  lists are reconciled by id (`core.reconcile`), so kept cards keep their images; a new view is
+  lists are reconciled by id (`core.reconcile`), so kept rows keep their images; a new view is
   swapped in after its data arrives, never a blank; a reset keeps the old list until the new
   one is here; no whole-view dimming; an edit shows at once and the server's answer confirms it.

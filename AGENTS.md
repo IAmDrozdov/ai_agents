@@ -18,7 +18,7 @@ Monorepo of local AI workflows exposed through one job contract (`shared.job`, A
 - Run a workflow from the terminal -> `uv run smoke <id> <path-or-url>`
 - Notes (app) -> `apps/notes/README.md`; smoke: `uv run notes-smoke <url-or-text>`
 - Diary (app) -> `apps/diary/README.md`, `docs/decisions/020-diary-app-and-per-app-dashboards.md`; checks: `docs/verifying.md` §2
-- Admin Mini App (notes, diary, usage) -> `docs/decisions/016-telegram-mini-app.md`, `docs/decisions/019-mini-app-over-a-slow-link.md` (caching, snapshot, polling), `docs/runtime.md`; checks: `docs/verifying.md` §2 and §5
+- Admin Mini App (notes, diary, usage) -> `docs/decisions/016-telegram-mini-app.md`, `docs/decisions/019-mini-app-over-a-slow-link.md` (caching, snapshot, polling), `docs/decisions/021-mini-app-place-and-mode-navigation.md` (Place and Mode, what is remembered, row actions), `docs/runtime.md`; checks: `docs/verifying.md` §2 and §5
 - Domain terms -> `CONTEXT.md`
 - New ADR -> `docs/decisions/NNN-title.md`
 - Deploy bot to droplet -> `.claude/skills/deploy-bot/SKILL.md` (slash: `/deploy-bot`)

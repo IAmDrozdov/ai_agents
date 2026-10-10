@@ -1,6 +1,6 @@
 // Дашборд: todo headline, two day heatmaps on one scale, Section bars. Only a Section bar and «просрочено» are tappable.
 
-import { api, attempt, el, keepSnapshot, setText, slot, snapshot } from "./core.js";
+import { AuthError, api, attempt, el, handleError, keepSnapshot, setText, slot, snapshot } from "./core.js";
 
 const SVG = "http://www.w3.org/2000/svg";
 const CELL = 11;
@@ -149,10 +149,17 @@ function buildDashboard(onSection, onOverdue) {
   return { node, update };
 }
 
-// Tells the server the Owner's zone without drawing anything: a launch on one Item skips the Dashboard.
-export const reportZone = () => attempt(() => api("/notes/dashboard?" + new URLSearchParams({ tz: TIMEZONE })));
+// Tells the server the Owner's zone without drawing anything: a launch opens whatever the Owner left on (ADR-021).
+// Only a lost session is shown: the view on screen reports a dead network itself.
+export async function reportZone() {
+  try {
+    await api("/notes/dashboard?" + new URLSearchParams({ tz: TIMEZONE }));
+  } catch (error) {
+    if (error instanceof AuthError) handleError(error);
+  }
+}
 
-// ctx.openSection(slug) opens Заметки with that Section expanded, ctx.openOverdue() with the «Просрочено» row; ctx.isCurrent() is false while another tab shows.
+// ctx.openSection(slug) opens the list on that Section, ctx.openOverdue() on «Просрочено»; ctx.isCurrent() is false while another view shows.
 // Returns { show, hide }; show reloads the figures.
 export async function mountDashboard(root, ctx) {
   const dash = buildDashboard(ctx.openSection, ctx.openOverdue);

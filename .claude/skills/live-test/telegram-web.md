@@ -36,7 +36,8 @@ bot chat's URL) live in `CLAUDE.local.md`, which is gitignored because this repo
 - Forwarding: open the message's context menu (right-click, or hover → the arrow), choose Forward,
   pick the bot's chat. The forwarded copy reaches the bot with `forward_origin` set.
 - The Mini App opens in an iframe modal, and the snapshot exposes its own controls, so `click` and
-  `fill` work in place. Telegram's native confirm shows as a parent dialog with OK / CANCEL. The
+  `fill` work in place. Telegram's native confirm shows as a parent dialog with OK / CANCEL; its back
+  button and main button («✓ Готово» on the Item view, ADR-021) are parent-page controls too. The
   modal remembers a collapsed state: expand it, or reload the tab. Screenshot the app with
   `take_screenshot` on the iframe's uid (a full-page shot shows the owner's chat list).
 - To drive the app top-level (a plain tab, easier to script), read the iframe `src` with
@@ -60,4 +61,4 @@ bot chat's URL) live in `CLAUDE.local.md`, which is gitignored because this repo
   different numbering and fail with "message to delete not found". Read `tg_message_id` of the Item
   (older Items also `tg_ack_message_id`) before the case deletes the Item; a message with no Item
   goes through the web context menu «Удалить» instead.
-- Test Items: Mini App → «Заметки» → Search `🧪` → item → «Удалить», then confirm (Search covers both Statuses).
+- Test Items: Mini App → «Заметки · записи» → «🔍» → `🧪` → the row's «⋮» → «🗑 Удалить», then confirm (Search covers both Statuses).

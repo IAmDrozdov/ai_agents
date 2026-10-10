@@ -10,7 +10,7 @@ the notes path or the deploy. Shorthand: `telegram_bot/x.py` and `handlers/x.py`
 | Service | Entry point | Does | Reads / writes |
 |---|---|---|---|
 | `bot` | `telegram-bot` (`telegram_bot/__main__.py`) | Telegram long polling. Answers users, prices cards, runs one job at a time (`worker.worker_loop`), and runs notes enrichment plus the notes sweeper, show loop, reminder loop and, once per start, the Thumbnail backfill | `telegram_bot.sqlite3` rw, `notes.sqlite3` rw, OpenAI, YouTube, the web |
-| `miniapp` | `telegram-miniapp` (`telegram_bot/miniapp`) | The admin Mini App: a public static shell plus a signed JSON API for notes, the diary and usage, `127.0.0.1:8083` (ADR-016, ADR-020) | `telegram_bot.sqlite3` read, `notes.sqlite3` rw, `diary.sqlite3` rw (the only process that opens it) |
+| `miniapp` | `telegram-miniapp` (`telegram_bot/miniapp`) | The admin Mini App: a public static shell plus a signed JSON API for notes, the diary and usage, `127.0.0.1:8083` (ADR-016, ADR-020, ADR-021) | `telegram_bot.sqlite3` read, `notes.sqlite3` rw, `diary.sqlite3` rw (the only process that opens it) |
 | `funnel` (profile) | `tailscale/tailscale` | Publishes `miniapp` over HTTPS through Tailscale Funnel, outbound only (ADR-016) | `tsstate` volume |
 | `warp` (profile) | wireproxy | SOCKS5 egress for yt-dlp only (ADR-014) | — |
 | — | `smoke`, `notes-smoke` | Terminal-only reference runs (ADR-001) | local files |
@@ -148,10 +148,16 @@ Language: the bot UI is English; notes texts and the Mini App are Russian.
 While `BOT_MINIAPP_URL` is set, the bot gives the admin's chat a `📒` menu button
 (`__main__.set_admin_menu_button`, at startup, for that chat only). It opens
 the `miniapp` service through the funnel sidecar: a static shell (`miniapp/static`, vanilla JS)
-that calls `/api/usage`, `/api/notes/*` and `/api/diary/*`. Its top row holds one tab per app, «Заметки» and
-«Дневник», and a ⚙️ button (ADR-020). Each tab (`toggled.js`) has a `[Дашборд | …]` toggle over two views, opens
-on its Dashboard, and is mounted once per launch, keeping its toggle position and views in memory until the app
-closes. A launch opens «Заметки» on its Dashboard; `✏️ Открыть` (`?item=<id>`) opens that Item in the notes Items view.
+that calls `/api/usage`, `/api/notes/*` and `/api/diary/*`. One 48 px title row (`nav.js`) is all the
+permanent navigation (ADR-021): a button naming the Place and its Mode («Заметки · записи ▾») and, to its
+right, the working view's own actions. The button opens the place menu: «Заметки» and «Дневник», each with a
+`[Записи | Дашборд]` segment, then «⚙️ Расходы». A Place's name opens it in the Mode it was left in. Each
+Place and Mode is mounted once per launch and kept until the app closes. A nested screen (the Item view, the
+Section form, the diary's Week, Day, Month and Year, Расходы) has no title row: Telegram's back button
+returns, and a client below Bot API 6.1 gets «← Назад» from the shell. The app remembers the last Place, each
+Place's Mode, the selected Section and whether the Section rail is shown (`nav_v1`, kept next to the
+snapshots; a 401 or 403 wipes both). A launch opens what is remembered, «Заметки · записи» the first time;
+`📅 Перенести` (`?item=<id>`) opens that Item over the notes list whatever is remembered.
 
 Funnel costs 250–450 ms a request, so the app is built to need few requests (ADR-019):
 - **Shell and assets.** The shell `/` is revalidated on every launch (ETag = a hash of the shell). Assets live
@@ -159,59 +165,76 @@ Funnel costs 250–450 ms a request, so the app is built to need few requests (A
   (`modulepreload`).
 - **Compression.** Responses over 500 B are gzipped.
 - **Snapshot.** The last answers are kept on the phone (`DeviceStorage`, else `localStorage`: Telegram Web answers DeviceStorage `UNSUPPORTED`;
-  `core.js` snapshots). The Dashboards, the Sections, the open lists, the current diary Week and the top
-  diary suggestions paint from them at once, then refresh behind them.
+  `core.js` snapshots). The Dashboards, the Sections, the selected Section's list, the current diary Week
+  (today's editor reads it) and the top diary suggestions paint from them at once, then refresh behind them.
 
-«Заметки» (`[Дашборд | Заметки]`):
+«Заметки» (Modes «записи» and «дашборд»):
 
-- **Дашборд** (first) is infographics only (`GET /api/notes/dashboard?tz=<IANA zone>`): the todo
+- **Записи** (`notes.js`) reads Items through `/api/notes/items`, one `notes.domain.lists` List per request:
+  `InSection` (`section`, `status`), `Overdue` (`overdue=true`), `Search` (`q`) and `Recheck` (`ids`).
+  On the left is the Section rail (44 px): «⏰» while something is Overdue (every Section, todo only, earliest
+  Due first), a button per Section in the Owner's order (its emoji, or the first two letters of its name;
+  dimmed when it has nothing to do), then «✓» and «✏️». The rest of the width is the selected Section: its
+  name, the count for the Status shown (`todo_count` / `done_count`) and its List, newest first, paged by
+  «Ещё»; an Item under several Sections shows in each. «✓» shows «Готово» instead of «Сделать» (one Status
+  per view, notes ADR-0010) until it is tapped again, «⏰» is picked, the Dashboard opens a Section, or the app
+  closes; «⏰» is always «Сделать». «◧» in the
+  title row hides the rail, and the Section's name then opens the list of Sections with their counts. «🔍»
+  (or the «/» key) puts the Search field in place of the title row: Search (`/api/notes/items?q=`, 300 ms
+  after typing stops, at most 100 results) covers both Statuses and every text field but the URL, folded by
+  the `fold()` SQL function the notes `Database` registers on each connection (casefold, «ё» as «е»). «✏️» is
+  edit mode, Section headers only: drag ⋮⋮ to reorder (`PUT /api/notes/sections/order`), ✏️ for the Section
+  form, «+ Новая секция» at the end; «Готово» in the title row or Esc leaves it.
+- **Дашборд** is infographics only (`GET /api/notes/dashboard?tz=<IANA zone>`): the todo
   count with «просрочено: N» beside it when anything is Overdue, two 26-week heatmaps of Items
   Captured and done per day (days in the Owner's time zone, from `created_at` and `done_at`), and a
   bar per Section with todo Items (`todo_count` from `/api/notes/sections`). A bar is tappable: it
-  switches the toggle to the Items view with that Section expanded on «Сделать»; so is «просрочено: N»,
-  which opens the «Просрочено» row. The request's `tz` is also stored as the Owner's zone.
-- **Заметки** reads Items through `/api/notes/items`, one `notes.domain.lists` List per request:
-  `InSection` (`section`, `status`), `Overdue` (`overdue=true`), `Search` (`q`) and `Recheck` (`ids`).
-  It starts with a «⏰ Просрочено» row when something is Overdue
-  (every Section, todo only, earliest Due first; collapsed on
-  launch, no switch, hidden in Search and edit mode). It lists every Section in the Owner's order as a
-  collapsed accordion. A header shows the
-  count for that Section's own «Сделать» | «Готово» switch (`todo_count` / `done_count`, one Status
-  per view, notes ADR-0010); an expanded Section pages `/api/notes/items?section=…&status=…`, newest
-  first, and an Item under several Sections shows in each. Search (`/api/notes/items?q=`, 300 ms
-  after typing stops, at most 100 results) covers both Statuses and every text field but the URL,
-  folded by the `fold()` SQL function the notes `Database` registers on each connection (casefold,
-  «ё» as «е»). «Изменить» shows headers only: drag ⋮⋮ to reorder (`PUT /api/notes/sections/order`),
-  ✏️ for the Section form, «+ Новая секция» at the end.
+  opens «записи» on that Section in «Сделать»; so is «просрочено: N», which opens «⏰». The request's `tz`
+  is also stored as the Owner's zone, so the app sends it on every launch, whatever it opens.
 
-«Дневник» (`[Дашборд | Записи]`, `apps/diary`, vocabulary `apps/diary/CONTEXT.md`). Both views carry
-«+ Добавить запись», which opens today's Day editor. Days are the Owner's local dates: the page sends `tz`
-and the router (`miniapp/api_diary.py`) turns it into «today» before calling the domain.
+«Дневник» (Modes «записи» and «дашборд», `apps/diary`, vocabulary `apps/diary/CONTEXT.md`). Days are the
+Owner's local dates: the page sends `tz` and the router (`miniapp/api_diary.py`) turns it into «today» before
+calling the domain.
 
+- **Записи** (`diary.js`) is today's Day editor: the Mark 💀 😐 🔥 (tapping the set one clears it), a field
+  that adds an Entry with prefix suggestions from `/api/diary/suggestions?prefix=` (the top five before
+  typing), and the Day's Entries, each with «+» (raise) and «✏️» (edit; delete is inside). With a mouse or a
+  desktop client the field takes the focus. «Неделя ›» in the title row, like the line «Эта неделя: N дней с
+  записями ›» under the editor, opens the Week as a nested screen (`GET /api/diary/week?day=&tz=`; today's
+  Week is read with the top five suggestions in one round): ‹ › between Weeks, a chip per Month the Week
+  touches, the Week's Summary under the Days; «+» raises an Entry, «−» lowers it. Over the Week, with
+  Telegram's back button returning: any Day's editor, the Month and the Year (Summary and candidates,
+  `GET /api/diary/month`, `/year`). Writes (`POST/PATCH/DELETE /api/diary/entries`,
+  `…/{id}/raise|lower`, `PUT /api/diary/marks`) show at once, go one at a time, and answer the Day or
+  the Entry; a refused write (422) or a failure reloads what is true.
 - **Дашборд** (`diaryboard.js`, `GET /api/diary/dashboard?year=&tz=`): two half-year Day maps coloured
   by Mark (drawn by `dashboard.js`'s `dayMap`, like the notes heatmaps), the counts (Entries, Days with an
   Entry, Streak, 🔥 Days), the most repeated Entry and the best Month; ‹ › change the Year. A Day on the
-  map switches the toggle to «Записи» on its Week.
-- **Записи** (`diary.js`): the Week (`GET /api/diary/week?day=&tz=`, read with the top five
-  suggestions in one round), ‹ › between Weeks, a chip per Month the Week touches, the Week's Summary
-  under the Days. «+» raises an Entry, «−» lowers it. Over the Week, with Telegram's back button
-  returning: the Day editor (Mark 💀 😐 🔥, tapping the set one clears it; add with prefix
-  suggestions from `/api/diary/suggestions?prefix=`; edit, delete), the Month and the Year (Summary and
-  candidates, `GET /api/diary/month`, `/year`). Writes (`POST/PATCH/DELETE /api/diary/entries`,
-  `…/{id}/raise|lower`, `PUT /api/diary/marks`) show at once, go one at a time, and answer the Day or
-  the Entry; a refused write (422) or a failure reloads what is true.
+  map opens «записи» with that Day's Week on top.
 
-- **⚙️** opens Расходы (`/api/usage`) over the tabs; Telegram's back button returns.
+«⚙️ Расходы» in the place menu opens Расходы (`/api/usage`) as a nested screen; Telegram's back button
+returns to the Place and Mode left.
 
-The item view (`detail.js`) edits an item (Sections, Annotation, «✓ Готово» / «↩ Вернуть», which
-also sets or clears `done_at`, and the Due: «+ Напомнить» reveals a date-time input, «×» removes it,
-a past moment is a 422), re-enriches, and deletes it at once behind a confirm; it reports each
-change back, and the accordion refreshes its counts and open lists, all in parallel. While an item
+An Item is a row (`cards.js` `row()`): the title (a Link's is underlined and opens it), up to two lines of
+where it came from and its Gist, its Due and the state of its Enrichment, and its Thumbnail
+(`/api/notes/items/{id}/thumb?v=<etag>`, notes ADR-0012), never a third-party URL. Every row has one menu
+(`rowactions.js`), opened by «⋮», a right click or a long press: «✓ Готово» (or «↩ Вернуть в «Сделать»»),
+«⏰ Напомнить», «🗂 Секции…», «💬 Открыть в чате», «↻ Разобрать заново» after a failed Enrichment, and
+«🗑 Удалить» behind a confirm. A swipe (a finger, a mouse drag or two fingers on a trackpad) is its shortcut:
+left shows «Ещё» and «Готово», further left closes the Item, right opens its Due. A Status change shows at
+once and is sent at once (it also sets or clears `done_at`); a toast offers «↩ Вернуть» for 4 s, which is a
+second real change.
+
+The Item view (`detail.js`) has a row «Задача» with «⋮» (show in the chat, enrich again, delete behind a
+confirm) and edits the Item: its Sections (its own are shown, «Изменить…» lists them all), its text or
+Annotation, and the Due («+ Напомнить» reveals a date-time input, «×» removes it, a past moment is a 422).
+«✓ Готово» / «↩ Вернуть в «Сделать»» is Telegram's main button: it saves an unsaved text with the Status,
+returns to the list and offers the same «↩ Вернуть». The view reports each change back, and the list
+refreshes its counts and rows. While an item
 on screen is still being enriched, the app asks about that item alone (`/api/notes/items?ids=`). The
 gap grows 3 s → 30 s, or lasts until its scheduled retry. Once it settles, the lists refresh.
-The app also reloads the shown tab when it becomes visible again; there is no push. A card's
-picture is the Item's Thumbnail (`/api/notes/items/{id}/thumb?v=<etag>`, notes ADR-0012), never a
-third-party URL. "💬 Показать в чате" sets `show_requested_at` and closes the app; the bot's
+The app also reloads the Place and Mode on screen when it becomes visible again; there is no push.
+"💬 Открыть в чате" sets `show_requested_at` and closes the app; the bot's
 show loop (`NotesRuntime.start_show_loop`, every 2 s) replies to the Item's original message, or sends
 the file again by `file_id` if that message is gone (notes ADR-0008). Enrichment files an Item only
 while it is in Other alone; once it is anywhere else, re-enrich keeps its Sections.

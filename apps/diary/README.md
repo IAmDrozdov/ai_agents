@@ -2,7 +2,7 @@
 
 The admin's diary of what got done, modelled on Хулендарь (hoolendar.ru): short Entries per Day, a
 Mark on the Day (💀 😐 🔥), and Summaries where the best Entries are raised from a Week into its Month
-and Year. Reached only from the admin Mini App's «Дневник» tab; nothing in the chat writes to it (ADR-020).
+and Year. Reached only from the admin Mini App's «Дневник» Place; nothing in the chat writes to it (ADR-020, ADR-021).
 
 - Vocabulary: `CONTEXT.md` (Day, Entry, Mark, Level, Raise, Week/Month/Year, Streak, Dashboard, Summary)
 - Decision: `docs/decisions/020-diary-app-and-per-app-dashboards.md`
@@ -13,7 +13,7 @@ and Year. Reached only from the admin Mini App's «Дневник» tab; nothing
 |---|---|
 | `apps/diary/src/diary/` | `domain.py` (every diary rule: Entries, Marks, Levels, Summaries, the Dashboard, the Streak, suggestions), sqlite store (`db.py`) |
 | `interfaces/telegram_bot/…/miniapp/api_diary.py` | the signed JSON API under `/api/diary`; turns the page's `tz` into «today» |
-| `interfaces/telegram_bot/…/miniapp/static/diary.js`, `diaryboard.js` | «Записи» (the Week, the Day editor, Month and Year) and the diary Dashboard |
+| `interfaces/telegram_bot/…/miniapp/static/diary.js`, `diaryboard.js` | «записи» (today's Day editor; the Week, Month and Year as nested screens) and the diary Dashboard |
 
 ## Rules worth knowing
 

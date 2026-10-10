@@ -1,4 +1,5 @@
-// The item view: opens over any list, edits one item, and reports every change back to the list that opened it.
+// The item view: a nested screen over the list (ADR-021). It edits one item and reports every change back to the
+// list that opened it; Telegram's main button closes the task, and the rest of the actions sit under «⋮».
 
 import {
   AuthError,
@@ -8,7 +9,9 @@ import {
   el,
   handleError,
   haptic,
+  hideMainButton,
   isHalted,
+  mainButton,
   pollDelay,
   setBack,
   setText,
@@ -26,20 +29,24 @@ import {
   isHttp,
   itemTitle,
   originOf,
+  reenrichToast,
   sectionLabel,
   toLocalInput,
 } from "./cards.js";
+import { closeMenu, openMenu } from "./nav.js";
 
 // The item fields the top of the item view shows; it is rebuilt only when one of them changes.
 const HEAD_FIELDS = [
   "kind", "url", "title", "text", "source", "author", "gist", "file_name",
   "created_at", "enrichment_status", "enrichment_error", "caption",
-  "transcript", "sender", "duration_s", "tg_message_id",
+  "transcript", "sender", "duration_s", "status",
 ]; // prettier-ignore
 
-// Shows `item` in `host` instead of `list`; `fresh` skips the first re-fetch. hooks: sections (all, in order),
-// changed(item), deleted(id), closed(), visible() (false once the tab is left). Returns { close }.
-export function openDetail({ list, host, item, fresh = false, ...hooks }) {
+// Shows `item` in `host` instead of `list`; `fresh` skips the first re-fetch; `focus`: "due" opens the reminder
+// field, "sections" every Section's chip. hooks: sections (all, in order), changed(item), deleted(id),
+// status(item, status, extra) (the main button: the list makes the change and offers the way back), closed(),
+// visible() (false once the view is left). Returns { close }.
+export function openDetail({ list, host, item, fresh = false, focus = null, ...hooks }) {
   const state = {
     detail: item,
     open: true,
@@ -47,6 +54,8 @@ export function openDetail({ list, host, item, fresh = false, ...hooks }) {
     busy: false,
     draft: null, // unsaved text
     dueOpen: false, // «+» was tapped and no Due is saved yet
+    sectionsOpen: focus === "sections", // every Section's chip shows, not only the item's own
+    main: null, // the Status the main button was last set for
   };
   let pollTimer = 0;
   let pollStep = 0;
@@ -58,6 +67,7 @@ export function openDetail({ list, host, item, fresh = false, ...hooks }) {
   setBack(close);
   window.scrollTo(0, 0);
   document.addEventListener("visibilitychange", onReturn);
+  if (focus === "due") openDue();
   if (!fresh) freshen(); // a list copy can be minutes old
 
   function close() {
@@ -65,10 +75,12 @@ export function openDetail({ list, host, item, fresh = false, ...hooks }) {
     state.open = false;
     clearTimeout(pollTimer);
     document.removeEventListener("visibilitychange", onReturn);
+    closeMenu();
     host.hidden = true;
     host.replaceChildren();
     list.hidden = false;
     setBack(null);
+    hideMainButton();
     window.scrollTo(0, listScroll);
     hooks.closed();
   }
@@ -115,7 +127,7 @@ export function openDetail({ list, host, item, fresh = false, ...hooks }) {
   async function act(fn) {
     if (state.busy) return undefined;
     state.busy = true;
-    parts.box.classList.add("busy"); // the card, not the whole view: "← К списку" stays tappable
+    parts.box.classList.add("busy"); // the box, not the whole view: «⋮» stays tappable
     try {
       return await attempt(fn);
     } finally {
@@ -145,20 +157,29 @@ export function openDetail({ list, host, item, fresh = false, ...hooks }) {
   }
 
   function build() {
-    const back = el("button", "btn small ghost", "← К списку");
-    back.onclick = close;
+    const bar = el("div", "bar");
+    const more = el("button", "icon-btn big", "⋮");
+    more.setAttribute("aria-label", "Ещё");
+    more.onclick = () => openMenu(more, menuItems(), { align: "right" });
+    const right = el("div", "right");
+    right.append(more);
+    bar.append(el("h1", null, "Задача"), right);
     const box = el("article", "detail");
     const head = el("div", "stack");
 
+    // Collapsed, the row shows the item's own Sections and any chip opens the rest; open, a chip files and unfiles.
     const sectionRow = el("div", "chip-row");
     const sectionButtons = new Map();
     for (const section of hooks.sections) {
       const chip = el("button", "chip filter", sectionLabel(section));
       chip.style.setProperty("--chip", section.color);
-      chip.onclick = () => toggleSection(section.slug);
+      chip.onclick = () => (state.sectionsOpen ? toggleSection(section.slug) : showSections(true));
       sectionButtons.set(section.slug, chip);
       sectionRow.append(chip);
     }
+    const sectionsToggle = el("button", "chip filter link");
+    sectionsToggle.onclick = () => showSections(!state.sectionsOpen);
+    sectionRow.append(sectionsToggle);
 
     const noteTitle = el("h3");
     const field = el("div", "field");
@@ -174,7 +195,6 @@ export function openDetail({ list, host, item, fresh = false, ...hooks }) {
     };
     save.onclick = () => patch({ text: area.value });
     field.append(area, save);
-    const actions = el("div", "actions");
 
     // One row of fixed height holds «+», or the input with «×»: opening it moves nothing.
     const dueRow = el("div", "due-row");
@@ -189,9 +209,41 @@ export function openDetail({ list, host, item, fresh = false, ...hooks }) {
     dueClear.onclick = removeDue;
     dueRow.append(dueAdd, dueInput, dueClear);
 
-    box.append(head, el("h3", null, "Секции"), sectionRow, el("h3", null, "Напоминание"), dueRow, noteTitle, field, actions);
-    host.replaceChildren(back, box);
-    return { box, head, sectionButtons, noteTitle, area, save, actions, dueAdd, dueInput, dueClear };
+    box.append(head, el("h3", null, "Секции"), sectionRow, el("h3", null, "Напоминание"), dueRow, noteTitle, field);
+    host.replaceChildren(bar, box);
+    return { box, head, sectionButtons, sectionsToggle, noteTitle, area, save, dueAdd, dueInput, dueClear };
+  }
+
+  function menuItems() {
+    const items = [];
+    if (state.detail.tg_message_id) items.push({ icon: "💬", label: "Открыть в чате", run: showInChat });
+    if (state.detail.enrichment_status !== "pending") {
+      items.push({ icon: "↻", label: "Разобрать заново", run: reenrich });
+    }
+    if (items.length) items.push({ sep: true });
+    items.push({ icon: "🗑", label: "Удалить", tone: "danger", run: deleteForever });
+    return items;
+  }
+
+  // The main button closes the view: the list changes the Status and offers the way back. Text typed and not
+  // saved goes along in the same request, and the view then waits for the answer: a refusal must not lose it.
+  async function flip() {
+    if (state.busy) return;
+    const shown = state.detail;
+    const next = shown.status === "todo" ? "done" : "todo";
+    if (state.draft == null) {
+      hooks.status(shown, next, {}); // before close(): the list then holds its refresh until the answer
+      close();
+      return;
+    }
+    const saved = await act(() => hooks.status(shown, next, { text: parts.area.value }));
+    if (saved && state.open) close();
+  }
+
+  function showSections(open) {
+    haptic("select");
+    state.sectionsOpen = open;
+    sync(state.detail);
   }
 
   async function toggleSection(slug) {
@@ -247,8 +299,7 @@ export function openDetail({ list, host, item, fresh = false, ...hooks }) {
   async function reenrich() {
     if (state.busy) return;
     const id = state.detail.id;
-    const slugs = state.detail.sections.map((section) => section.slug);
-    const refiles = !slugs.length || (slugs.length === 1 && slugs[0] === OTHER); // the Classifier's rule (ADR-0010)
+    const queued = reenrichToast(state.detail);
     state.rev += 1;
     const updated = await act(() => api(`/notes/items/${id}/reenrich`, { method: "POST" }));
     if (!updated) return;
@@ -256,7 +307,7 @@ export function openDetail({ list, host, item, fresh = false, ...hooks }) {
     if (!state.open) return;
     state.detail = updated;
     sync(updated);
-    toast(refiles ? "Поставил в очередь" : "Поставил в очередь. Секции оставлю как есть");
+    toast(queued);
   }
 
   async function deleteForever() {
@@ -288,20 +339,8 @@ export function openDetail({ list, host, item, fresh = false, ...hooks }) {
     const origin = originOf(item);
     if (origin) nodes.push(el("div", "origin", origin));
     if (item.gist) nodes.push(el("div", "gist", item.gist));
-    nodes.push(el("div", "hint", "Сохранено " + fmtDate(item.created_at)));
-    if (item.enrichment_status === "pending") {
-      nodes.push(enrichmentBadge(item));
-    } else {
-      if (item.enrichment_status === "failed") nodes.push(enrichmentBadge(item));
-      const retry = el("button", "btn small ghost", "Разобрать заново");
-      retry.onclick = reenrich;
-      nodes.push(retry);
-    }
-    if (item.tg_message_id) {
-      const show = el("button", "btn small ghost", "💬 Показать в чате");
-      show.onclick = showInChat;
-      nodes.push(show);
-    }
+    nodes.push(el("div", "hint", "Сохранено " + fmtDate(item.created_at) + (item.status === "done" ? " · ✓ готово" : "")));
+    if (["pending", "failed"].includes(item.enrichment_status)) nodes.push(enrichmentBadge(item));
     if (item.kind === "voice") nodes.push(el("div", "hint", "🎤 " + fmtDuration(item.duration_s)));
     if (item.transcript) {
       const details = el("details", "caption");
@@ -317,29 +356,16 @@ export function openDetail({ list, host, item, fresh = false, ...hooks }) {
     return nodes;
   }
 
-  function actionNodes(item) {
-    const nodes = [];
-    const add = (label, cls, handler) => {
-      const button = el("button", "btn small " + cls, label);
-      button.onclick = handler;
-      nodes.push(button);
-    };
-    const mark = (status) => () => {
-      haptic("select");
-      patch({ status }, { status });
-    };
-    if (item.status === "todo") add("✓ Готово", "", mark("done"));
-    else add("↩ Вернуть", "ghost", mark("todo"));
-    add("Удалить", "danger", deleteForever);
-    return nodes;
-  }
-
   // Brings the view in line with `item`: only what differs is touched.
   function sync(item) {
-    const { head, sectionButtons, noteTitle, area, save, actions, dueAdd, dueInput, dueClear } = parts;
+    const { head, sectionButtons, sectionsToggle, noteTitle, area, save, dueAdd, dueInput, dueClear } = parts;
     slot(head, JSON.stringify(HEAD_FIELDS.map((field) => item[field])), () => headNodes(item));
     const current = new Set(item.sections.map((section) => section.slug));
-    for (const [slug, button] of sectionButtons) button.classList.toggle("on", current.has(slug));
+    for (const [slug, button] of sectionButtons) {
+      button.classList.toggle("on", current.has(slug));
+      button.hidden = !state.sectionsOpen && !current.has(slug);
+    }
+    setText(sectionsToggle, state.sectionsOpen ? "Свернуть" : "Изменить…");
     setText(noteTitle, item.kind === "note" ? "Текст заметки" : "Моя пометка");
     const saved = item.text || "";
     if (state.draft == null && area.value !== saved) area.value = saved;
@@ -349,7 +375,10 @@ export function openDetail({ list, host, item, fresh = false, ...hooks }) {
     dueInput.hidden = !dueShown;
     dueClear.hidden = !dueShown;
     if (document.activeElement !== dueInput) dueInput.value = item.due_at ? toLocalInput(item.due_at) : "";
-    slot(actions, item.status, () => actionNodes(item));
+    if (state.main !== item.status && state.open && !isHalted()) {
+      state.main = item.status;
+      mainButton(item.status === "todo" ? "✓ Готово" : "↩ Вернуть в «Сделать»", flip);
+    }
     schedulePoll();
   }
 

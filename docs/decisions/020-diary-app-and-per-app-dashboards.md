@@ -1,6 +1,6 @@
 # ADR-020: A diary app, and a Dashboard inside each Mini App tab
 
-Status: Accepted (2026-10-08). Amends ADR-016 (decision 1: what the Mini App holds) and ADR-015 (a second app).
+Status: Accepted (2026-10-08). Amends ADR-016 (decision 1: what the Mini App holds) and ADR-015 (a second app). Decision 4 superseded by ADR-021 (place and mode navigation).
 
 ## Context
 

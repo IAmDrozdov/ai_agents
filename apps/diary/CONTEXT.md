@@ -32,7 +32,7 @@ The run of consecutive Days, each with at least one Entry, that ends today or ye
 _Avoid_: chain, серия (in code)
 
 **Dashboard**:
-The diary tab's first view, infographics only, for one Year: a Day map coloured by Mark, the counts (Entries, Days with an Entry, the Streak, 🔥 Days), the most repeated Entry and the best Month. Tapping a Day opens its Week. Not the notes Dashboard.
+One of the two Modes of the diary Place (the other is today's Day), infographics only, for one Year: a Day map coloured by Mark, the counts (Entries, Days with an Entry, the Streak, 🔥 Days), the most repeated Entry and the best Month. Tapping a Day opens its Week. Not the notes Dashboard.
 _Avoid_: overview, stats, обзор
 
 **Summary**:

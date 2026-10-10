@@ -86,7 +86,7 @@ What is fetched and derived for an Item after Capture: title, Source, Author, ca
 _Avoid_: scraping, processing, decoding, metadata
 
 **Thumbnail**:
-The small square picture a card shows, cut during Enrichment from a Link's cover or a File's preview and kept with the Item; never loaded from the Link's site.
+The small square picture an Item's row shows, cut during Enrichment from a Link's cover or a File's preview and kept with the Item; never loaded from the Link's site.
 _Avoid_: cover, preview, image, обложка
 
 **Gist**:
@@ -106,7 +106,7 @@ Whether the Owner has taken an Item up yet: todo, or done once they have — a s
 _Avoid_: state, stage, progress, viewed, started, archived, open, closed
 
 **Dashboard**:
-The notes tab's first view (the other is the Items), infographics only: how many Items are todo and how many of them are Overdue, how many were Captured and done each day, and how the todo Items spread over Sections; tapping a Section there, or the Overdue count, opens it in the Items view.
+One of the two Modes of the notes Place (the other lists Items), infographics only: how many Items are todo and how many of them are Overdue, how many were Captured and done each day, and how the todo Items spread over Sections; tapping a Section there, or the Overdue count, opens it in the other Mode.
 _Avoid_: overview, home, stats, обзор
 
 **Search**:

@@ -1,11 +1,11 @@
-// The diary's Dashboard: one Year's Day map coloured by Mark, the counts, the most repeated Entry, the best Month.
-// A Day on the map opens its Week in «Записи».
+// Дневник · дашборд: one Year's Day map coloured by Mark, the counts, the most repeated Entry, the best Month.
+// A Day on the map opens its Week in «записи».
 
 import { api, attempt, el, keepSnapshot, plural, setText, slot, snapshot } from "./core.js";
 import { TIMEZONE, dayMap, fmtDay } from "./dashboard.js";
-import { MARK_EMOJI, MONTHS, addEntryButton, mondayOf, todayIso } from "./diary.js";
+import { MARK_EMOJI, MONTHS, mondayOf, todayIso } from "./diary.js";
 
-const EMPTY_HINT = "В этом году записей пока нет. «Добавить запись» — и день появится на карте.";
+const EMPTY_HINT = "В этом году записей пока нет. Запиши что-нибудь в «Записях» — и день появится на карте.";
 
 // Two half-years, each as wide as a notes heatmap, so a Day stays big enough to tap on a phone.
 function markMaps(board) {
@@ -32,7 +32,7 @@ function tile(label) {
   return { node, set: (value) => setText(n, String(value)) };
 }
 
-// ctx.open(view, arg) switches the toggle; ctx.isCurrent() is false while another tab or view shows.
+// ctx.open(mode, arg) opens the place's other mode; ctx.isCurrent() is false while another view shows.
 export async function mountDiaryBoard(root, ctx) {
   const node = el("div", "board");
   const nav = el("div", "diary-nav");
@@ -49,7 +49,7 @@ export async function mountDiaryBoard(root, ctx) {
   const mapBody = map.lastChild;
   mapBody.onclick = (event) => {
     const day = event.target.closest?.("[data-day]")?.dataset.day;
-    if (day) ctx.open("week", { day });
+    if (day) ctx.open("list", { day });
   };
   const tiles = el("div", "stats");
   const counts = {
@@ -63,7 +63,7 @@ export async function mountDiaryBoard(root, ctx) {
   const topLine = el("p", "fact");
   const bestLine = el("p", "fact");
   facts.append(topLine, bestLine);
-  node.append(addEntryButton(ctx), nav, hint, map, tiles, facts);
+  node.append(nav, hint, map, tiles, facts);
   root.replaceChildren(node);
 
   const thisYear = () => Number(todayIso().slice(0, 4));
